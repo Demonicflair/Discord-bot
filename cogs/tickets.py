@@ -7,9 +7,9 @@ import sqlite3
 TICKET_CATEGORY = "Tickets"
 
 # =========================
-# 💾 DATABASE
+# 💾 DATABASE (FIXED)
 # =========================
-db = sqlite3.connect("tickets.db")
+db = sqlite3.connect("tickets.db", check_same_thread=False)
 cursor = db.cursor()
 
 cursor.execute("""
@@ -22,12 +22,15 @@ db.commit()
 
 
 # =========================
-# 📜 TRANSCRIPT FUNCTION
+# 📜 SAFE TRANSCRIPT
 # =========================
 async def create_transcript(channel):
     messages = []
-    async for msg in channel.history(limit=None, oldest_first=True):
-        messages.append(f"{msg.author}: {msg.content}")
+    try:
+        async for msg in channel.history(limit=1000, oldest_first=True):
+            messages.append(f"{msg.author}: {msg.content}")
+    except Exception as e:
+        messages.append(f"Error reading messages: {e}")
 
     content = "\n".join(messages)
 
@@ -38,7 +41,7 @@ async def create_transcript(channel):
 
 
 # =========================
-# 🎫 OPEN BUTTON VIEW
+# 🎫 OPEN BUTTON
 # =========================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -52,63 +55,61 @@ class TicketView(discord.ui.View):
         guild = interaction.guild
         user = interaction.user
 
-        # Get/Create category
-        category = discord.utils.get(guild.categories, name=TICKET_CATEGORY)
-        if category is None:
-            category = await guild.create_category(TICKET_CATEGORY)
+        try:
+            category = discord.utils.get(guild.categories, name=TICKET_CATEGORY)
+            if category is None:
+                category = await guild.create_category(TICKET_CATEGORY)
 
-        # Prevent duplicate tickets
-        for ch in category.channels:
-            if ch.name == f"ticket-{user.id}":
-                return await interaction.followup.send(
-                    "❌ You already have a ticket open!",
-                    ephemeral=True
-                )
+            for ch in category.channels:
+                if ch.name == f"ticket-{user.id}":
+                    return await interaction.followup.send(
+                        "❌ You already have a ticket!",
+                        ephemeral=True
+                    )
 
-        # Get support roles
-        cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (guild.id,))
-        roles = cursor.fetchall()
+            cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (guild.id,))
+            roles = cursor.fetchall()
 
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-        }
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(read_messages=False),
+                user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+            }
 
-        mention_text = user.mention
+            mention_text = user.mention
 
-        for r in roles:
-            role = guild.get_role(r[0])
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                mention_text += f" {role.mention}"
+            for r in roles:
+                role = guild.get_role(r[0])
+                if role:
+                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                    mention_text += f" {role.mention}"
 
-        # Create channel
-        channel = await guild.create_text_channel(
-            name=f"ticket-{user.id}",
-            category=category,
-            overwrites=overwrites
-        )
+            channel = await guild.create_text_channel(
+                name=f"ticket-{user.id}",
+                category=category,
+                overwrites=overwrites
+            )
 
-        embed = discord.Embed(
-            title="🎫 Ticket Opened",
-            description="Support will assist you shortly.",
-            color=discord.Color.green()
-        )
+            await channel.send(
+                content=mention_text,
+                embed=discord.Embed(
+                    title="🎫 Ticket Opened",
+                    description="Support will assist you shortly.",
+                    color=discord.Color.green()
+                ),
+                view=TicketControlView()
+            )
 
-        await channel.send(
-            content=mention_text,
-            embed=embed,
-            view=TicketControlView()
-        )
+            await interaction.followup.send(
+                f"✅ Ticket created: {channel.mention}",
+                ephemeral=True
+            )
 
-        await interaction.followup.send(
-            f"✅ Ticket created: {channel.mention}",
-            ephemeral=True
-        )
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
 
 
 # =========================
-# 🔒 CONTROL VIEW (FIXED)
+# 🔒 CONTROL VIEW (SAFE)
 # =========================
 class TicketControlView(discord.ui.View):
     def __init__(self):
@@ -116,36 +117,29 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.blurple)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"🛠️ Claimed by {interaction.user.mention}"
-        )
+        try:
+            await interaction.response.send_message(
+                f"🛠️ Claimed by {interaction.user.mention}"
+            )
+        except Exception as e:
+            print(f"Claim error: {e}")
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        # ✅ Respond immediately
         await interaction.response.send_message("🔒 Closing ticket...", ephemeral=True)
 
         try:
-            # 📜 Transcript
             file = await create_transcript(interaction.channel)
             await interaction.channel.send("📄 Transcript:", file=file)
 
-            # ⏳ Wait
             await asyncio.sleep(3)
-
-            # 🧨 Delete channel
             await interaction.channel.delete()
 
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ I don't have permission to delete this channel",
-                ephemeral=True
-            )
-
         except Exception as e:
+            print(f"Close error: {e}")
             await interaction.followup.send(
-                f"❌ Error: {e}",
+                f"❌ Failed to close: {e}",
                 ephemeral=True
             )
 
@@ -160,9 +154,12 @@ class Tickets(commands.Cog):
     # ➕ ADD SUPPORT ROLE
     @app_commands.command(name="addsupport", description="Add support role")
     async def addsupport_slash(self, interaction: discord.Interaction, role: discord.Role):
-        cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (interaction.guild.id, role.id))
-        db.commit()
-        await interaction.response.send_message(f"✅ Added {role.mention}")
+        try:
+            cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (interaction.guild.id, role.id))
+            db.commit()
+            await interaction.response.send_message(f"✅ Added {role.mention}")
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}")
 
     @commands.command()
     async def addsupport(self, ctx, role: discord.Role):
