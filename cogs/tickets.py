@@ -1,12 +1,13 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 
 TICKET_CATEGORY = "Tickets"
 STAFF_ROLE_NAME = "Staff"
 
 # =========================
-# 🎫 BUTTON VIEW
+# 🎫 OPEN BUTTON VIEW
 # =========================
 class TicketView(discord.ui.View):
     def __init__(self):
@@ -15,58 +16,68 @@ class TicketView(discord.ui.View):
     @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.green)
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
 
+        await interaction.response.defer(ephemeral=True)
+
         guild = interaction.guild
         user = interaction.user
 
-        # Get or create category
+        # Get/Create category
         category = discord.utils.get(guild.categories, name=TICKET_CATEGORY)
         if category is None:
             category = await guild.create_category(TICKET_CATEGORY)
 
-        # Check if ticket already exists
+        # Prevent duplicate tickets
         for ch in category.channels:
             if ch.name == f"ticket-{user.id}":
-                return await interaction.response.send_message(
+                return await interaction.followup.send(
                     "❌ You already have a ticket open!",
                     ephemeral=True
                 )
 
+        # Get staff role
         staff_role = discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
+        if staff_role is None:
+            return await interaction.followup.send(
+                "❌ Create a role named 'Staff' first!",
+                ephemeral=True
+            )
 
+        # Permissions
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             staff_role: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
 
+        # Create channel
         channel = await guild.create_text_channel(
-            name=f"ticket-{user.name}",
+            name=f"ticket-{user.id}",
             category=category,
             overwrites=overwrites
         )
 
         embed = discord.Embed(
-            title="🎫 Ticket Created",
-            description="A staff member will assist you shortly.",
+            title="🎫 Ticket Opened",
+            description="Support will be with you shortly.\nUse buttons below to manage ticket.",
             color=discord.Color.green()
         )
 
         await channel.send(
-            content=f"{user.mention} {staff_role.mention}",
+            content=f"{user.mention} | {staff_role.mention}",
             embed=embed,
-            view=CloseView()
+            view=TicketControlView()
         )
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Ticket created: {channel.mention}",
             ephemeral=True
         )
 
 
 # =========================
-# 🔒 CLOSE VIEW
+# 🔒 TICKET CONTROL VIEW
 # =========================
-class CloseView(discord.ui.View):
+class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
@@ -78,19 +89,21 @@ class CloseView(discord.ui.View):
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         await interaction.response.send_message("🔒 Closing ticket in 5 seconds...")
-        await discord.utils.sleep_until(discord.utils.utcnow() + discord.timedelta(seconds=5))
+
+        await asyncio.sleep(5)
         await interaction.channel.delete()
 
 
 # =========================
-# 🎫 TICKET COG
+# 🎫 MAIN COG
 # =========================
 class Tickets(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # SLASH COMMAND
+    # Slash command
     @app_commands.command(name="ticketpanel", description="Send ticket panel")
     async def ticketpanel(self, interaction: discord.Interaction):
 
@@ -105,7 +118,7 @@ class Tickets(commands.Cog):
             view=TicketView()
         )
 
-    # PREFIX COMMAND
+    # Prefix command
     @commands.command()
     async def panel(self, ctx):
 
