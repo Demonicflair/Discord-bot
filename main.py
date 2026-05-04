@@ -33,17 +33,32 @@ class MyBot(commands.Bot):
         except Exception as e:
             print(f"Slash sync error: {e}")
 
+
 # 🔹 Create bot
 bot = MyBot()
 
-# 🔹 Ready event
+
+# 🔹 Ready Event (IMPORTANT FOR TICKETS)
 @bot.event
 async def on_ready():
+    try:
+        # 👇 Import ticket views here to avoid circular import
+        from cogs.tickets import TicketView, TicketControlView
+
+        # ✅ Persistent views (fixes interaction failed after restart)
+        bot.add_view(TicketView())
+        bot.add_view(TicketControlView())
+
+    except Exception as e:
+        print(f"Ticket view error: {e}")
+
     print(f"Logged in as {bot.user}")
+
 
 # 🔹 Run bot
 async def main():
     async with bot:
         await bot.start(config.TOKEN)
+
 
 asyncio.run(main())
