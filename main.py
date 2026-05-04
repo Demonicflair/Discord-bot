@@ -29,9 +29,13 @@ class MyBot(commands.Bot):
         # ✅ Sync slash commands
         try:
             await self.tree.sync()
-            print("Slash commands synced")
+            print("Slash commands synced globally")
         except Exception as e:
-            print(f"Slash sync error: {e}")
+            print(f"Global sync error: {e}")
+
+        # ⚡ OPTIONAL (FASTER TESTING - REPLACE WITH YOUR SERVER ID)
+        # guild = discord.Object(id=123456789012345678)
+        # await self.tree.sync(guild=guild)
 
 
 # 🔹 Create bot
@@ -42,17 +46,17 @@ bot = MyBot()
 @bot.event
 async def on_ready():
     try:
-        # 👇 Import ticket views here to avoid circular import
+        # Import ticket views here (avoids errors)
         from cogs.tickets import TicketView, TicketControlView
 
-        # ✅ Persistent views (fixes interaction failed after restart)
+        # ✅ Persistent Views (fixes interaction failed forever)
         bot.add_view(TicketView())
         bot.add_view(TicketControlView())
 
     except Exception as e:
         print(f"Ticket view error: {e}")
 
-    print(f"Logged in as {bot.user}")
+    print(f"✅ Logged in as {bot.user}")
 
 
 # 🔹 Run bot
