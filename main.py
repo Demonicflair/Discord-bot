@@ -1,13 +1,18 @@
 import discord
 from discord.ext import commands
-import os
 import asyncio
+import os
 import config
 
-# 🔹 Intents
+# =========================
+# 🔹 INTENTS
+# =========================
 intents = discord.Intents.all()
 
-# 🔹 Bot Class
+
+# =========================
+# 🔹 BOT CLASS
+# =========================
 class MyBot(commands.Bot):
     def __init__(self):
         super().__init__(
@@ -17,7 +22,7 @@ class MyBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        # ✅ Load all cogs
+        # ✅ Load all cogs automatically
         for file in os.listdir("./cogs"):
             if file.endswith(".py"):
                 try:
@@ -29,37 +34,57 @@ class MyBot(commands.Bot):
         # ✅ Sync slash commands
         try:
             await self.tree.sync()
-            print("Slash commands synced globally")
+            print("✅ Slash commands synced")
         except Exception as e:
-            print(f"Global sync error: {e}")
-
-        # ⚡ OPTIONAL (FASTER TESTING - REPLACE WITH YOUR SERVER ID)
-        # guild = discord.Object(id=123456789012345678)
-        # await self.tree.sync(guild=guild)
+            print(f"❌ Sync error: {e}")
 
 
-# 🔹 Create bot
+# =========================
+# 🔹 CREATE BOT
+# =========================
 bot = MyBot()
 
 
-# 🔹 Ready Event (IMPORTANT FOR TICKETS)
+# =========================
+# 🔹 READY EVENT
+# =========================
 @bot.event
 async def on_ready():
+    print(f"✅ Logged in as {bot.user}")
+
+    # 🔥 IMPORTANT: Persistent Views (fixes interaction failed)
     try:
-        # Import ticket views here (avoids errors)
         from cogs.tickets import TicketView, TicketControlView
 
-        # ✅ Persistent Views (fixes interaction failed forever)
         bot.add_view(TicketView())
         bot.add_view(TicketControlView())
 
+        print("✅ Ticket views loaded")
+
     except Exception as e:
-        print(f"Ticket view error: {e}")
-
-    print(f"✅ Logged in as {bot.user}")
+        print(f"❌ Ticket view error: {e}")
 
 
-# 🔹 Run bot
+# =========================
+# 🔹 ERROR HANDLER (ANTI-CRASH)
+# =========================
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        return await ctx.send("❌ You don't have permission.")
+
+    if isinstance(error, commands.MissingRequiredArgument):
+        return await ctx.send("❌ Missing arguments.")
+
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    await ctx.send(f"❌ Error: {error}")
+
+
+# =========================
+# 🔹 RUN BOT
+# =========================
 async def main():
     async with bot:
         await bot.start(config.TOKEN)
