@@ -3,11 +3,12 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 import sqlite3
+import io
 
 TICKET_CATEGORY = "Tickets"
 
 # =========================
-# 💾 DATABASE (FIXED)
+# 💾 DATABASE
 # =========================
 db = sqlite3.connect("tickets.db", check_same_thread=False)
 cursor = db.cursor()
@@ -18,98 +19,100 @@ CREATE TABLE IF NOT EXISTS ticket_settings(
     role_id INTEGER
 )
 """)
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS ticket_logs(
+    guild_id INTEGER,
+    channel_id INTEGER
+)
+""")
+
 db.commit()
 
 
 # =========================
-# 📜 SAFE TRANSCRIPT
+# 📜 TRANSCRIPT
 # =========================
 async def create_transcript(channel):
     messages = []
-    try:
-        async for msg in channel.history(limit=1000, oldest_first=True):
-            messages.append(f"{msg.author}: {msg.content}")
-    except Exception as e:
-        messages.append(f"Error reading messages: {e}")
+    async for msg in channel.history(limit=1000, oldest_first=True):
+        messages.append(f"{msg.author}: {msg.content}")
 
     content = "\n".join(messages)
-
-    return discord.File(
-        fp=bytes(content, "utf-8"),
-        filename=f"{channel.name}.txt"
-    )
+    return discord.File(io.BytesIO(content.encode()), filename=f"{channel.name}.txt")
 
 
 # =========================
-# 🎫 OPEN BUTTON
+# 🎯 CATEGORY DROPDOWN
 # =========================
-class TicketView(discord.ui.View):
+class TicketDropdown(discord.ui.Select):
     def __init__(self):
-        super().__init__(timeout=None)
+        options = [
+            discord.SelectOption(label="Support", description="General help"),
+            discord.SelectOption(label="Report", description="Report a user"),
+            discord.SelectOption(label="Other", description="Other issues"),
+        ]
+        super().__init__(placeholder="Choose ticket type...", options=options)
 
-    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.green)
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-
+    async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
         user = interaction.user
 
-        try:
-            category = discord.utils.get(guild.categories, name=TICKET_CATEGORY)
-            if category is None:
-                category = await guild.create_category(TICKET_CATEGORY)
+        category = discord.utils.get(guild.categories, name=TICKET_CATEGORY)
+        if category is None:
+            category = await guild.create_category(TICKET_CATEGORY)
 
-            for ch in category.channels:
-                if ch.name == f"ticket-{user.id}":
-                    return await interaction.followup.send(
-                        "❌ You already have a ticket!",
-                        ephemeral=True
-                    )
+        # Prevent duplicates
+        for ch in category.channels:
+            if ch.name == f"ticket-{user.id}":
+                return await interaction.followup.send("❌ You already have a ticket!", ephemeral=True)
 
-            cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (guild.id,))
-            roles = cursor.fetchall()
+        # Get roles
+        cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (guild.id,))
+        roles = cursor.fetchall()
 
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(read_messages=False),
-                user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
-            }
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
 
-            mention_text = user.mention
+        mention_text = user.mention
 
-            for r in roles:
-                role = guild.get_role(r[0])
-                if role:
-                    overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-                    mention_text += f" {role.mention}"
+        for r in roles:
+            role = guild.get_role(r[0])
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+                mention_text += f" {role.mention}"
 
-            channel = await guild.create_text_channel(
-                name=f"ticket-{user.id}",
-                category=category,
-                overwrites=overwrites
-            )
+        channel = await guild.create_text_channel(
+            name=f"{self.values[0].lower()}-{user.id}",
+            category=category,
+            overwrites=overwrites
+        )
 
-            await channel.send(
-                content=mention_text,
-                embed=discord.Embed(
-                    title="🎫 Ticket Opened",
-                    description="Support will assist you shortly.",
-                    color=discord.Color.green()
-                ),
-                view=TicketControlView()
-            )
+        await channel.send(
+            content=mention_text,
+            embed=discord.Embed(
+                title=f"{self.values[0]} Ticket",
+                description="Support will assist you.",
+                color=discord.Color.green()
+            ),
+            view=TicketControlView()
+        )
 
-            await interaction.followup.send(
-                f"✅ Ticket created: {channel.mention}",
-                ephemeral=True
-            )
+        await interaction.followup.send(f"✅ Ticket created: {channel.mention}", ephemeral=True)
 
-        except Exception as e:
-            await interaction.followup.send(f"❌ Error: {e}", ephemeral=True)
+
+class TicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.add_item(TicketDropdown())
 
 
 # =========================
-# 🔒 CONTROL VIEW (SAFE)
+# 🔒 CONTROL VIEW
 # =========================
 class TicketControlView(discord.ui.View):
     def __init__(self):
@@ -117,120 +120,78 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.blurple)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.send_message(
-                f"🛠️ Claimed by {interaction.user.mention}"
-            )
-        except Exception as e:
-            print(f"Claim error: {e}")
+
+        await interaction.response.send_message(f"🛠️ Claimed by {interaction.user.mention}")
+
+        # Lock others (optional)
+        for role in interaction.guild.roles:
+            if role != interaction.user.top_role:
+                try:
+                    await interaction.channel.set_permissions(role, send_messages=False)
+                except:
+                    pass
+
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
 
-        await interaction.response.send_message("🔒 Closing ticket...", ephemeral=True)
+        await interaction.response.defer()
 
-        try:
-            file = await create_transcript(interaction.channel)
-            await interaction.channel.send("📄 Transcript:", file=file)
+        guild = interaction.guild
 
-            await asyncio.sleep(3)
-            await interaction.channel.delete()
+        # Create transcript
+        file = await create_transcript(interaction.channel)
 
-        except Exception as e:
-            print(f"Close error: {e}")
-            await interaction.followup.send(
-                f"❌ Failed to close: {e}",
-                ephemeral=True
-            )
+        # Send to logs
+        cursor.execute("SELECT channel_id FROM ticket_logs WHERE guild_id=?", (guild.id,))
+        data = cursor.fetchone()
+
+        if data:
+            log_channel = guild.get_channel(data[0])
+            if log_channel:
+                await log_channel.send(
+                    f"📁 Ticket Closed: {interaction.channel.name}",
+                    file=file
+                )
+
+        await interaction.channel.send("🔒 Ticket closed. Deleting in 5 seconds...")
+        await asyncio.sleep(5)
+        await interaction.channel.delete()
 
 
 # =========================
-# 🎫 MAIN COG
+# 🎫 COG
 # =========================
 class Tickets(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # ➕ ADD SUPPORT ROLE
+    # LOG CHANNEL
+    @app_commands.command(name="setlog", description="Set ticket log channel")
+    async def setlog(self, interaction: discord.Interaction, channel: discord.TextChannel):
+
+        cursor.execute("DELETE FROM ticket_logs WHERE guild_id=?", (interaction.guild.id,))
+        cursor.execute("INSERT INTO ticket_logs VALUES (?, ?)", (interaction.guild.id, channel.id))
+        db.commit()
+
+        await interaction.response.send_message(f"✅ Log channel set to {channel.mention}")
+
+    # SUPPORT ROLES
     @app_commands.command(name="addsupport", description="Add support role")
-    async def addsupport_slash(self, interaction: discord.Interaction, role: discord.Role):
-        try:
-            cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (interaction.guild.id, role.id))
-            db.commit()
-            await interaction.response.send_message(f"✅ Added {role.mention}")
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}")
+    async def addsupport(self, interaction: discord.Interaction, role: discord.Role):
 
-    @commands.command()
-    async def addsupport(self, ctx, role: discord.Role):
-        cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (ctx.guild.id, role.id))
+        cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (interaction.guild.id, role.id))
         db.commit()
-        await ctx.send(f"✅ Added {role.mention}")
 
-    # ➖ REMOVE ROLE
-    @app_commands.command(name="removesupport", description="Remove support role")
-    async def removesupport_slash(self, interaction: discord.Interaction, role: discord.Role):
-        cursor.execute("DELETE FROM ticket_settings WHERE guild_id=? AND role_id=?", (interaction.guild.id, role.id))
-        db.commit()
-        await interaction.response.send_message(f"❌ Removed {role.mention}")
+        await interaction.response.send_message(f"✅ Added {role.mention}")
 
-    @commands.command()
-    async def removesupport(self, ctx, role: discord.Role):
-        cursor.execute("DELETE FROM ticket_settings WHERE guild_id=? AND role_id=?", (ctx.guild.id, role.id))
-        db.commit()
-        await ctx.send(f"❌ Removed {role.mention}")
-
-    # 📋 LIST ROLES
-    @app_commands.command(name="listsupport", description="List support roles")
-    async def listsupport_slash(self, interaction: discord.Interaction):
-
-        cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (interaction.guild.id,))
-        roles = cursor.fetchall()
-
-        if not roles:
-            return await interaction.response.send_message("No support roles set")
-
-        text = "\n".join(
-            [interaction.guild.get_role(r[0]).mention for r in roles if interaction.guild.get_role(r[0])]
-        )
-
-        await interaction.response.send_message(text)
-
-    @commands.command()
-    async def listsupport(self, ctx):
-
-        cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (ctx.guild.id,))
-        roles = cursor.fetchall()
-
-        if not roles:
-            return await ctx.send("No support roles set")
-
-        text = "\n".join(
-            [ctx.guild.get_role(r[0]).mention for r in roles if ctx.guild.get_role(r[0])]
-        )
-
-        await ctx.send(text)
-
-    # 🧹 CLEAR ROLES
-    @app_commands.command(name="clearsupport", description="Clear all roles")
-    async def clearsupport_slash(self, interaction: discord.Interaction):
-        cursor.execute("DELETE FROM ticket_settings WHERE guild_id=?", (interaction.guild.id,))
-        db.commit()
-        await interaction.response.send_message("🧹 Cleared all support roles")
-
-    @commands.command()
-    async def clearsupport(self, ctx):
-        cursor.execute("DELETE FROM ticket_settings WHERE guild_id=?", (ctx.guild.id,))
-        db.commit()
-        await ctx.send("🧹 Cleared all support roles")
-
-    # 🎫 PANEL
-    @app_commands.command(name="ticketpanel", description="Send ticket panel")
+    # PANEL
+    @app_commands.command(name="ticketpanel", description="Send panel")
     async def ticketpanel(self, interaction: discord.Interaction):
 
         embed = discord.Embed(
             title="🎫 Support System",
-            description="Click below to open a ticket",
+            description="Select a category below to open a ticket",
             color=discord.Color.blurple()
         )
 
@@ -238,13 +199,11 @@ class Tickets(commands.Cog):
 
     @commands.command()
     async def panel(self, ctx):
-
         embed = discord.Embed(
             title="🎫 Support System",
-            description="Click below to open a ticket",
+            description="Select a category below",
             color=discord.Color.blurple()
         )
-
         await ctx.send(embed=embed, view=TicketView())
 
 
