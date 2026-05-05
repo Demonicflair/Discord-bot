@@ -9,7 +9,7 @@ class Security(commands.Cog):
         self.messages = {}
 
     # =========================
-    # AI RAID DETECTION
+    # ANTI RAID
     # =========================
     @commands.Cog.listener()
     async def on_member_join(self, member):
@@ -23,7 +23,7 @@ class Security(commands.Cog):
             await self.lockdown(member.guild)
 
     # =========================
-    # AI SPAM DETECTION
+    # SPAM DETECTION
     # =========================
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -60,9 +60,6 @@ class Security(commands.Cog):
             except:
                 pass
 
-    # =========================
-    # COMMANDS
-    # =========================
     @commands.hybrid_command()
     async def lockdown_cmd(self, ctx):
         await self.lockdown(ctx.guild)
@@ -72,6 +69,7 @@ class Security(commands.Cog):
     async def unlock_cmd(self, ctx):
         await self.unlock(ctx.guild)
         await ctx.send("🔓 Unlocked")
+
 
 async def setup(bot):
     await bot.add_cog(Security(bot))
