@@ -43,7 +43,7 @@ async def create_transcript(channel):
 
 
 # =========================
-# 🎯 CATEGORY DROPDOWN
+# 🎯 DROPDOWN
 # =========================
 class TicketDropdown(discord.ui.Select):
     def __init__(self):
@@ -64,12 +64,10 @@ class TicketDropdown(discord.ui.Select):
         if category is None:
             category = await guild.create_category(TICKET_CATEGORY)
 
-        # Prevent duplicates
         for ch in category.channels:
-            if ch.name == f"ticket-{user.id}":
+            if ch.name.endswith(str(user.id)):
                 return await interaction.followup.send("❌ You already have a ticket!", ephemeral=True)
 
-        # Get roles
         cursor.execute("SELECT role_id FROM ticket_settings WHERE guild_id=?", (guild.id,))
         roles = cursor.fetchall()
 
@@ -120,17 +118,7 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.blurple)
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-
         await interaction.response.send_message(f"🛠️ Claimed by {interaction.user.mention}")
-
-        # Lock others (optional)
-        for role in interaction.guild.roles:
-            if role != interaction.user.top_role:
-                try:
-                    await interaction.channel.set_permissions(role, send_messages=False)
-                except:
-                    pass
-
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -139,10 +127,8 @@ class TicketControlView(discord.ui.View):
 
         guild = interaction.guild
 
-        # Create transcript
         file = await create_transcript(interaction.channel)
 
-        # Send to logs
         cursor.execute("SELECT channel_id FROM ticket_logs WHERE guild_id=?", (guild.id,))
         data = cursor.fetchone()
 
@@ -166,7 +152,7 @@ class Tickets(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # LOG CHANNEL
+    # ✅ SET LOG CHANNEL
     @app_commands.command(name="setlog", description="Set ticket log channel")
     async def setlog(self, interaction: discord.Interaction, channel: discord.TextChannel):
 
@@ -176,7 +162,7 @@ class Tickets(commands.Cog):
 
         await interaction.response.send_message(f"✅ Log channel set to {channel.mention}")
 
-    # SUPPORT ROLES
+    # ➕ ADD SUPPORT ROLE
     @app_commands.command(name="addsupport", description="Add support role")
     async def addsupport(self, interaction: discord.Interaction, role: discord.Role):
 
@@ -185,7 +171,34 @@ class Tickets(commands.Cog):
 
         await interaction.response.send_message(f"✅ Added {role.mention}")
 
-    # PANEL
+    @commands.command()
+    async def addsupport(self, ctx, role: discord.Role):
+        cursor.execute("INSERT INTO ticket_settings VALUES (?, ?)", (ctx.guild.id, role.id))
+        db.commit()
+        await ctx.send(f"✅ Added {role.mention}")
+
+    # ❌ REMOVE SUPPORT ROLE (NEW)
+    @app_commands.command(name="removesupport", description="Remove support role")
+    async def removesupport(self, interaction: discord.Interaction, role: discord.Role):
+
+        cursor.execute(
+            "DELETE FROM ticket_settings WHERE guild_id=? AND role_id=?",
+            (interaction.guild.id, role.id)
+        )
+        db.commit()
+
+        await interaction.response.send_message(f"❌ Removed {role.mention}")
+
+    @commands.command()
+    async def removesupport(self, ctx, role: discord.Role):
+        cursor.execute(
+            "DELETE FROM ticket_settings WHERE guild_id=? AND role_id=?",
+            (ctx.guild.id, role.id)
+        )
+        db.commit()
+        await ctx.send(f"❌ Removed {role.mention}")
+
+    # 🎫 PANEL
     @app_commands.command(name="ticketpanel", description="Send panel")
     async def ticketpanel(self, interaction: discord.Interaction):
 
