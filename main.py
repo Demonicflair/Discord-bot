@@ -1,93 +1,72 @@
 import discord
 from discord.ext import commands
 import asyncio
-import os
 import config
+import os
 
 # =========================
-# 🔹 INTENTS
+# INTENTS
 # =========================
-intents = discord.Intents.all()
-
-
-# =========================
-# 🔹 BOT CLASS
-# =========================
-class MyBot(commands.Bot):
-    def __init__(self):
-        super().__init__(
-            command_prefix="!",
-            intents=intents,
-            help_command=None
-        )
-
-    async def setup_hook(self):
-        # ✅ Load all cogs automatically
-        for file in os.listdir("./cogs"):
-            if file.endswith(".py"):
-                try:
-                    await self.load_extension(f"cogs.{file[:-3]}")
-                    print(f"Loaded cog: {file}")
-                except Exception as e:
-                    print(f"Failed to load {file}: {e}")
-
-        # ✅ Sync slash commands
-        try:
-            await self.tree.sync()
-            print("✅ Slash commands synced")
-        except Exception as e:
-            print(f"❌ Sync error: {e}")
-
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+intents.guilds = True
 
 # =========================
-# 🔹 CREATE BOT
+# BOT SETUP
 # =========================
-bot = MyBot()
-
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    help_command=None
+)
 
 # =========================
-# 🔹 READY EVENT
+# LOAD COGS
+# =========================
+async def load_cogs():
+    for filename in os.listdir("./cogs"):
+        if filename.endswith(".py"):
+            try:
+                await bot.load_extension(f"cogs.{filename[:-3]}")
+                print(f"Loaded: {filename}")
+            except Exception as e:
+                print(f"Failed to load {filename}: {e}")
+
+# =========================
+# READY EVENT
 # =========================
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    print(f"Logged in as {bot.user}")
 
-    # 🔥 IMPORTANT: Persistent Views (fixes interaction failed)
     try:
-        from cogs.tickets import TicketView, TicketControlView
-
-        bot.add_view(TicketView())
-        bot.add_view(TicketControlView())
-
-        print("✅ Ticket views loaded")
-
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands")
     except Exception as e:
-        print(f"❌ Ticket view error: {e}")
-
+        print(f"Sync error: {e}")
 
 # =========================
-# 🔹 ERROR HANDLER (ANTI-CRASH)
+# ERROR HANDLER
 # =========================
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        return await ctx.send("❌ You don't have permission.")
-
-    if isinstance(error, commands.MissingRequiredArgument):
-        return await ctx.send("❌ Missing arguments.")
-
-    if isinstance(error, commands.CommandNotFound):
+        await ctx.send("❌ You don't have permission to use this command.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ Missing argument.\nUsage: `{ctx.prefix}{ctx.command} {ctx.command.signature}`")
+    elif isinstance(error, commands.CommandNotFound):
         return
-
-    await ctx.send(f"❌ Error: {error}")
-
+    else:
+        await ctx.send("❌ Error occurred.")
+        print(error)
 
 # =========================
-# 🔹 RUN BOT
+# START BOT
 # =========================
 async def main():
     async with bot:
+        await load_cogs()
         await bot.start(config.TOKEN)
-
 
 asyncio.run(main())
