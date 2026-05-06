@@ -3,6 +3,8 @@ from discord.ext import commands
 from discord import app_commands
 import time, sqlite3, re
 
+from utils.logger import get_logs, save_log, is_log_enabled
+
 db = sqlite3.connect("security.db", check_same_thread=False)
 cursor = db.cursor()
 
@@ -20,6 +22,7 @@ FEATURES = [
     app_commands.Choice(name="Raid Protection", value="raid"),
     app_commands.Choice(name="Lockdown System", value="lockdown"),
 ]
+
 
 class SecurityPanel(discord.ui.View):
     def __init__(self, cog, guild_id):
@@ -79,12 +82,22 @@ class Security(commands.Cog):
         cursor.execute("INSERT INTO settings VALUES (?, ?, ?)", (gid, feature, int(state)))
         db.commit()
 
-    # =========================
-    # WHITELIST
-    # =========================
     def is_whitelisted(self, gid, uid):
         cursor.execute("SELECT * FROM whitelist WHERE guild_id=? AND user_id=?", (gid, uid))
         return cursor.fetchone() is not None
+
+    # =========================
+    # LOG HELPER
+    # =========================
+    async def send_log(self, guild, log_type, content):
+        logs = get_logs(guild.id)
+
+        if logs and is_log_enabled(guild.id, log_type):
+            channel = guild.get_channel(logs[1])
+            if channel:
+                await channel.send(content)
+
+        save_log(guild.id, 0, log_type, content)
 
     # =========================
     # UI EMBED
@@ -104,7 +117,6 @@ class Security(commands.Cog):
         embed.add_field(name="Raid", value=status("raid"))
         embed.add_field(name="Lockdown", value=status("lockdown"))
 
-        embed.set_footer(text="Click buttons below to toggle systems")
         return embed
 
     # =========================
@@ -121,12 +133,17 @@ class Security(commands.Cog):
         self.scores[key] = self.scores.get(key, 0) + points
         score = self.scores[key]
 
+        await self.send_log(message.guild, "spam", f"⚠️ {user} → {reason} (score: {score})")
+
         if score >= 10:
             await user.ban(reason=reason)
+            await self.send_log(message.guild, "spam", f"🔨 {user} banned (AI)")
         elif score >= 7:
             await user.kick(reason=reason)
+            await self.send_log(message.guild, "spam", f"👢 {user} kicked (AI)")
         elif score >= 4:
             await user.timeout(discord.utils.utcnow() + discord.timedelta(seconds=60))
+            await self.send_log(message.guild, "spam", f"⏳ {user} timed out")
         elif score >= 2:
             await message.channel.send(f"⚠️ {user.mention} warning: {reason}")
 
@@ -143,6 +160,7 @@ class Security(commands.Cog):
 
         if (now - member.created_at.timestamp()) < 60:
             await member.kick(reason="New account raid")
+            await self.send_log(member.guild, "raid", f"🚨 {member} kicked (new account)")
             return
 
         self.joins.setdefault(gid, []).append(now)
@@ -150,6 +168,7 @@ class Security(commands.Cog):
 
         if len(self.joins[gid]) >= 5:
             await self.lockdown(member.guild)
+            await self.send_log(member.guild, "raid", "🚨 Raid detected → Lockdown enabled")
 
     # =========================
     # MESSAGE AI
@@ -202,6 +221,8 @@ class Security(commands.Cog):
             except:
                 pass
 
+        await self.send_log(guild, "lockdown", "🔒 Server locked down")
+
     async def unlock(self, guild):
         if guild.id not in self.locked_channels:
             return
@@ -212,6 +233,8 @@ class Security(commands.Cog):
                 await ch.set_permissions(guild.default_role, send_messages=old)
             except:
                 pass
+
+        await self.send_log(guild, "lockdown", "🔓 Server unlocked")
 
     # =========================
     # COMMANDS
