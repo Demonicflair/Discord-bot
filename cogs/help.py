@@ -17,29 +17,31 @@ CATEGORY_EMOJIS = {
 # LOADING EMBED
 # =========================
 def loading_embed(text="🪄 Loading..."):
-    return discord.Embed(
-        description=text,
-        color=discord.Color.blurple()
-    )
+    return discord.Embed(description=text, color=discord.Color.blurple())
+
 
 # =========================
-# SEARCH MODAL
+# SEARCH MODAL (SAFE)
 # =========================
-class SearchModal(discord.ui.Modal, title="🔎 Search Command"):
-    query = discord.ui.TextInput(
-        label="Enter command name",
-        placeholder="ban, security, ticket..."
-    )
-
+class SearchModal(discord.ui.Modal):
     def __init__(self, view):
-        super().__init__()
+        super().__init__(title="🔎 Search Command")
         self.view = view
+
+        self.query = discord.ui.TextInput(
+            label="Command name",
+            placeholder="ban, ticket, security..."
+        )
+
+        self.add_item(self.query)
 
     async def on_submit(self, interaction: discord.Interaction):
         q = self.query.value.lower()
 
-        # show loading animation
-        await interaction.response.edit_message(embed=loading_embed("🔎 Searching..."), view=None)
+        await interaction.response.edit_message(
+            embed=loading_embed("🔎 Searching..."),
+            view=None
+        )
 
         results = []
         for cmd in self.view.commands_data:
@@ -67,10 +69,19 @@ class HelpView(discord.ui.View):
         super().__init__(timeout=180)
         self.bot = bot
         self.ctx = ctx
+
         self.commands_data = self.get_commands()
         self.categories = self.build_categories()
-        self.current_category = list(self.categories.keys())[0]
 
+        self.current_category = (
+            list(self.categories.keys())[0] if self.categories else "Other"
+        )
+
+        self.add_dropdown()
+
+    # =========================
+    # COMMAND FETCH
+    # =========================
     def get_commands(self):
         data = []
         for cmd in self.bot.commands:
@@ -85,48 +96,65 @@ class HelpView(discord.ui.View):
             })
         return data
 
+    # =========================
+    # CATEGORY BUILD
+    # =========================
     def build_categories(self):
         cats = {}
         for cmd in self.commands_data:
             cats.setdefault(cmd["cog"], []).append(cmd)
-        return cats
+        return cats or {"Other": []}
 
+    # =========================
+    # EMBED
+    # =========================
     def build_embed(self):
-        cmds = self.categories[self.current_category]
+        cmds = self.categories.get(self.current_category, [])
         emoji = CATEGORY_EMOJIS.get(self.current_category, "⚙️")
 
         desc = ""
         for c in cmds[:15]:
             desc += f"**/{c['name']}** `{c['usage']}`\n> {c['desc']}\n\n"
 
-        embed = discord.Embed(
+        return discord.Embed(
             title=f"{emoji} {self.current_category}",
             description=desc or "No commands",
             color=discord.Color.blurple()
         )
 
-        embed.set_footer(text=f"{len(cmds)} commands • Use menu below")
-        return embed
-
     # =========================
-    # ANIMATION SWITCH
+    # DROPDOWN (SAFE)
     # =========================
-    async def switch_category(self, interaction, category):
-        self.current_category = category
+    def add_dropdown(self):
+        options = [
+            discord.SelectOption(
+                label=name,
+                value=name,
+                emoji=CATEGORY_EMOJIS.get(name, "⚙️")
+            )
+            for name in self.categories.keys()
+        ]
 
-        await interaction.response.edit_message(embed=loading_embed(), view=None)
-
-        await interaction.edit_original_response(
-            embed=self.build_embed(),
-            view=self
+        select = discord.ui.Select(
+            placeholder="📚 Select category...",
+            options=options
         )
 
-    # =========================
-    # DROPDOWN
-    # =========================
-    @discord.ui.select(placeholder="📚 Select category...")
-    async def select_category(self, interaction, select):
-        await self.switch_category(interaction, select.values[0])
+        async def callback(interaction):
+            await interaction.response.edit_message(
+                embed=loading_embed(),
+                view=None
+            )
+
+            self.current_category = select.values[0]
+
+            await interaction.edit_original_response(
+                embed=self.build_embed(),
+                view=self
+            )
+
+        select.callback = callback
+        self.add_item(select)
 
     # =========================
     # BUTTONS
@@ -137,7 +165,10 @@ class HelpView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Refresh", style=discord.ButtonStyle.blurple)
     async def refresh(self, interaction, button):
-        await interaction.response.edit_message(embed=loading_embed(), view=None)
+        await interaction.response.edit_message(
+            embed=loading_embed(),
+            view=None
+        )
 
         self.commands_data = self.get_commands()
         self.categories = self.build_categories()
@@ -150,7 +181,18 @@ class HelpView(discord.ui.View):
     @discord.ui.button(label="🏠 Home", style=discord.ButtonStyle.gray)
     async def home(self, interaction, button):
         first = list(self.categories.keys())[0]
-        await self.switch_category(interaction, first)
+
+        await interaction.response.edit_message(
+            embed=loading_embed(),
+            view=None
+        )
+
+        self.current_category = first
+
+        await interaction.edit_original_response(
+            embed=self.build_embed(),
+            view=self
+        )
 
 
 # =========================
@@ -164,16 +206,16 @@ class Help(commands.Cog):
     async def help_command(self, ctx):
         view = HelpView(self.bot, ctx)
 
-        view.select_category.options = [
-            discord.SelectOption(
-                label=name,
-                value=name,
-                emoji=CATEGORY_EMOJIS.get(name, "⚙️")
+        if ctx.interaction:
+            await ctx.interaction.response.send_message(
+                embed=loading_embed("🪄 Opening help panel..."),
+                ephemeral=True
             )
-            for name in view.categories.keys()
-        ]
-
-        msg = await ctx.send(embed=loading_embed("🪄 Opening help panel..."))
+            msg = await ctx.interaction.original_response()
+        else:
+            msg = await ctx.send(
+                embed=loading_embed("🪄 Opening help panel...")
+            )
 
         await msg.edit(
             embed=view.build_embed(),
