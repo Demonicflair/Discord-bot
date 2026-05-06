@@ -1,7 +1,9 @@
-
 import discord
 from discord.ext import commands
 from discord import app_commands
+
+from utils.logger import get_logs, save_log, is_log_enabled
+
 
 class Moderation(commands.Cog):
     def __init__(self, bot):
@@ -32,9 +34,25 @@ class Moderation(commands.Cog):
 
         embed = discord.Embed(title="🔨 User Banned", color=discord.Color.red())
         embed.add_field(name="User", value=member.mention)
+        embed.add_field(name="Moderator", value=ctx.author.mention)
         embed.add_field(name="Reason", value=reason or "No reason")
 
         await ctx.send(embed=embed)
+
+        # ===== LOG SYSTEM =====
+        logs = get_logs(ctx.guild.id)
+
+        if logs and is_log_enabled(ctx.guild.id, "ban"):
+            channel = ctx.guild.get_channel(logs[0])
+            if channel:
+                await channel.send(embed=embed)
+
+        save_log(
+            ctx.guild.id,
+            member.id,
+            "ban",
+            f"{member} banned by {ctx.author} | Reason: {reason}"
+        )
 
     # =========================
     # 🔨 BAN (SLASH)
@@ -58,9 +76,25 @@ class Moderation(commands.Cog):
 
         embed = discord.Embed(title="🔨 User Banned", color=discord.Color.red())
         embed.add_field(name="User", value=member.mention)
+        embed.add_field(name="Moderator", value=interaction.user.mention)
         embed.add_field(name="Reason", value=reason)
 
         await interaction.response.send_message(embed=embed)
+
+        # ===== LOG SYSTEM =====
+        logs = get_logs(interaction.guild.id)
+
+        if logs and is_log_enabled(interaction.guild.id, "ban"):
+            channel = interaction.guild.get_channel(logs[0])
+            if channel:
+                await channel.send(embed=embed)
+
+        save_log(
+            interaction.guild.id,
+            member.id,
+            "ban",
+            f"{member} banned by {interaction.user} | Reason: {reason}"
+        )
 
     # =========================
     # 👢 KICK (PREFIX)
@@ -85,7 +119,27 @@ class Moderation(commands.Cog):
 
         await member.kick(reason=reason)
 
-        await ctx.send(f"👢 {member} kicked")
+        embed = discord.Embed(title="👢 User Kicked", color=discord.Color.orange())
+        embed.add_field(name="User", value=member.mention)
+        embed.add_field(name="Moderator", value=ctx.author.mention)
+        embed.add_field(name="Reason", value=reason or "No reason")
+
+        await ctx.send(embed=embed)
+
+        # ===== LOG SYSTEM =====
+        logs = get_logs(ctx.guild.id)
+
+        if logs and is_log_enabled(ctx.guild.id, "kick"):
+            channel = ctx.guild.get_channel(logs[0])
+            if channel:
+                await channel.send(embed=embed)
+
+        save_log(
+            ctx.guild.id,
+            member.id,
+            "kick",
+            f"{member} kicked by {ctx.author} | Reason: {reason}"
+        )
 
     # =========================
     # 👢 KICK (SLASH)
@@ -106,7 +160,28 @@ class Moderation(commands.Cog):
             return await interaction.response.send_message("❌ I cannot kick this user", ephemeral=True)
 
         await member.kick(reason=reason)
-        await interaction.response.send_message(f"👢 Kicked {member}")
+
+        embed = discord.Embed(title="👢 User Kicked", color=discord.Color.orange())
+        embed.add_field(name="User", value=member.mention)
+        embed.add_field(name="Moderator", value=interaction.user.mention)
+        embed.add_field(name="Reason", value=reason)
+
+        await interaction.response.send_message(embed=embed)
+
+        # ===== LOG SYSTEM =====
+        logs = get_logs(interaction.guild.id)
+
+        if logs and is_log_enabled(interaction.guild.id, "kick"):
+            channel = interaction.guild.get_channel(logs[0])
+            if channel:
+                await channel.send(embed=embed)
+
+        save_log(
+            interaction.guild.id,
+            member.id,
+            "kick",
+            f"{member} kicked by {interaction.user} | Reason: {reason}"
+        )
 
     # =========================
     # ⚠️ WARN (BOTH)
@@ -117,14 +192,29 @@ class Moderation(commands.Cog):
         if member is None:
             return await ctx.send("❌ Usage: !warn @user [reason]")
 
-        await ctx.send(f"⚠️ {member.mention} warned\nReason: {reason or 'No reason'}")
+        msg = f"⚠️ {member.mention} warned\nReason: {reason or 'No reason'}"
+        await ctx.send(msg)
+
+        save_log(
+            ctx.guild.id,
+            member.id,
+            "warn",
+            f"{member} warned by {ctx.author} | Reason: {reason}"
+        )
 
     @app_commands.command(name="warn", description="Warn a user")
     async def warn_slash(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
 
-        await interaction.response.send_message(
-            f"⚠️ {member.mention} warned\nReason: {reason}"
+        msg = f"⚠️ {member.mention} warned\nReason: {reason}"
+        await interaction.response.send_message(msg)
+
+        save_log(
+            interaction.guild.id,
+            member.id,
+            "warn",
+            f"{member} warned by {interaction.user} | Reason: {reason}"
         )
+
 
 async def setup(bot):
     await bot.add_cog(Moderation(bot))
