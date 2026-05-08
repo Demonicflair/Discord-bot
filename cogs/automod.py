@@ -1,18 +1,27 @@
-# automod.py
-
 import discord
 from discord.ext import commands
-import time
+from discord import app_commands
 import sqlite3
-import re
-
-from utils.logger import get_logs, save_log, is_log_enabled
+import time
+from collections import defaultdict
 
 # =========================
 # DATABASE
 # =========================
-db = sqlite3.connect("automod.db", check_same_thread=False)
+db = sqlite3.connect(
+    "automod.db",
+    check_same_thread=False
+)
+
 cursor = db.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS automod_settings(
+    guild_id INTEGER,
+    feature TEXT,
+    value TEXT
+)
+""")
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS automod_whitelist(
@@ -24,72 +33,28 @@ CREATE TABLE IF NOT EXISTS automod_whitelist(
 db.commit()
 
 # =========================
-# CONFIG
+# DEFAULTS
 # =========================
-SPAM_LIMIT = 6
-SPAM_TIME = 5
+DEFAULTS = {
+    "spam_enabled": "true",
+    "spam_limit": "6",
 
-MENTION_LIMIT = 5
-CAPS_PERCENT = 70
-DUPLICATE_LIMIT = 3
+    "caps_enabled": "true",
+    "caps_limit": "70",
 
-BAD_LINKS = [
-    "discord.gg/",
-    "discord.com/invite/",
-    "grabify",
-    "iplogger"
-]
+    "mention_enabled": "true",
+    "mention_limit": "5",
 
-# =========================
-# MEMORY
-# =========================
-user_messages = {}
-duplicate_cache = {}
-user_warns = {}
+    "duplicate_enabled": "true",
+    "duplicate_limit": "3",
 
+    "invite_enabled": "true",
+
+    "punishment": "timeout"
+}
 
 # =========================
-# EMBED
-# =========================
-def embed_builder(title, description, color=discord.Color.red()):
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        color=color,
-        timestamp=discord.utils.utcnow()
-    )
-
-    return embed
-
-
-# =========================
-# LOGGING
-# =========================
-async def send_log(guild, log_type, embed):
-
-    logs = get_logs(guild.id)
-
-    if not logs:
-        return
-
-    if not is_log_enabled(guild.id, log_type):
-        return
-
-    channel = guild.get_channel(logs[1])
-
-    if not channel:
-        return
-
-    try:
-        await channel.send(embed=embed)
-
-    except:
-        pass
-
-
-# =========================
-# AUTOMOD
+# COG
 # =========================
 class AutoMod(commands.Cog):
 
@@ -97,159 +62,224 @@ class AutoMod(commands.Cog):
 
         self.bot = bot
 
+        self.spam = defaultdict(list)
+        self.duplicates = defaultdict(int)
+        self.last_message = {}
+
     # =========================
-    # WHITELIST CHECK
+    # SETTINGS
     # =========================
-    def is_whitelisted(self, guild_id, user_id):
+    def get_setting(
+        self,
+        guild_id,
+        feature
+    ):
 
         cursor.execute(
-            "SELECT * FROM automod_whitelist WHERE guild_id=? AND user_id=?",
+            """
+            SELECT value
+            FROM automod_settings
+            WHERE guild_id=? AND feature=?
+            """,
+            (guild_id, feature)
+        )
+
+        data = cursor.fetchone()
+
+        if data:
+            return data[0]
+
+        return DEFAULTS.get(feature)
+
+    def set_setting(
+        self,
+        guild_id,
+        feature,
+        value
+    ):
+
+        cursor.execute(
+            """
+            DELETE FROM automod_settings
+            WHERE guild_id=? AND feature=?
+            """,
+            (guild_id, feature)
+        )
+
+        cursor.execute(
+            """
+            INSERT INTO automod_settings
+            VALUES (?, ?, ?)
+            """,
+            (
+                guild_id,
+                feature,
+                str(value)
+            )
+        )
+
+        db.commit()
+
+    # =========================
+    # WHITELIST
+    # =========================
+    def is_whitelisted(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM automod_whitelist
+            WHERE guild_id=? AND user_id=?
+            """,
             (guild_id, user_id)
         )
 
         return cursor.fetchone() is not None
 
     # =========================
-    # AI PUNISHMENT
+    # PUNISH
     # =========================
-    async def punish(self, message, reason):
+    async def punish(
+        self,
+        member,
+        reason
+    ):
 
-        guild = message.guild
-        user = message.author
+        punishment = self.get_setting(
+            member.guild.id,
+            "punishment"
+        )
 
-        if self.is_whitelisted(guild.id, user.id):
-            return
-
-        user_warns[user.id] = user_warns.get(user.id, 0) + 1
-
-        warns = user_warns[user.id]
-
-        # =========================
-        # DELETE MESSAGE
-        # =========================
         try:
-            await message.delete()
+
+            if punishment == "warn":
+
+                await member.send(
+                    f"⚠️ Warning in {member.guild.name}\nReason: {reason}"
+                )
+
+            elif punishment == "timeout":
+
+                await member.timeout(
+                    discord.utils.utcnow()
+                    + discord.timedelta(minutes=10),
+                    reason=reason
+                )
+
+            elif punishment == "kick":
+
+                await member.kick(
+                    reason=reason
+                )
+
+            elif punishment == "ban":
+
+                await member.ban(
+                    reason=reason
+                )
 
         except:
             pass
 
-        # =========================
-        # WARN
-        # =========================
-        if warns == 1:
-
-            embed = embed_builder(
-                "⚠️ Warning",
-                f"{user.mention}\nReason: {reason}",
-                discord.Color.orange()
-            )
-
-            await message.channel.send(embed=embed, delete_after=5)
-
-        # =========================
-        # TIMEOUT
-        # =========================
-        elif warns >= 2:
-
-            try:
-
-                until = discord.utils.utcnow() + discord.timedelta(minutes=5)
-
-                await user.timeout(
-                    until,
-                    reason=f"AutoMod: {reason}"
-                )
-
-                embed = embed_builder(
-                    "🔇 Auto Timeout",
-                    (
-                        f"{user.mention} has been timed out.\n"
-                        f"Reason: {reason}"
-                    )
-                )
-
-                await message.channel.send(embed=embed)
-
-            except:
-                pass
-
-        # =========================
-        # LOG
-        # =========================
-        log_embed = embed_builder(
-            "🛡️ AutoMod Triggered",
-            (
-                f"👤 User: {user.mention}\n"
-                f"📍 Channel: {message.channel.mention}\n"
-                f"⚠️ Reason: {reason}\n"
-                f"📈 Warn Count: {warns}"
-            )
-        )
-
-        await send_log(guild, "automod", log_embed)
-
-        save_log(
-            guild.id,
-            user.id,
-            "automod",
-            f"{user} triggered automod: {reason}"
-        )
-
     # =========================
-    # MESSAGE DETECTION
+    # MESSAGE EVENT
     # =========================
     @commands.Cog.listener()
     async def on_message(self, message):
 
-        if not message.guild:
+        if (
+            not message.guild
+            or message.author.bot
+        ):
             return
 
-        if message.author.bot:
+        if self.is_whitelisted(
+            message.guild.id,
+            message.author.id
+        ):
             return
 
-        if self.is_whitelisted(message.guild.id, message.author.id):
-            return
-
-        uid = message.author.id
-        now = time.time()
+        content = message.content
 
         # =========================
-        # SPAM DETECTION
+        # SPAM
         # =========================
-        user_messages.setdefault(uid, [])
+        if self.get_setting(
+            message.guild.id,
+            "spam_enabled"
+        ) == "true":
 
-        user_messages[uid].append(now)
-
-        user_messages[uid] = [
-            t for t in user_messages[uid]
-            if now - t < SPAM_TIME
-        ]
-
-        if len(user_messages[uid]) >= SPAM_LIMIT:
-
-            await self.punish(
-                message,
-                "Spam detected"
+            limit = int(
+                self.get_setting(
+                    message.guild.id,
+                    "spam_limit"
+                )
             )
 
-            return
+            uid = message.author.id
+
+            now = time.time()
+
+            self.spam[uid].append(now)
+
+            self.spam[uid] = [
+                t for t in self.spam[uid]
+                if now - t < 5
+            ]
+
+            if len(self.spam[uid]) >= limit:
+
+                try:
+                    await message.delete()
+                except:
+                    pass
+
+                await self.punish(
+                    message.author,
+                    "Spam detected"
+                )
+
+                return
 
         # =========================
-        # CAPS DETECTION
+        # CAPS
         # =========================
-        if len(message.content) >= 8:
+        if self.get_setting(
+            message.guild.id,
+            "caps_enabled"
+        ) == "true":
 
-            upper = sum(1 for c in message.content if c.isupper())
-            letters = sum(1 for c in message.content if c.isalpha())
+            if len(content) >= 8:
 
-            if letters > 0:
+                upper = sum(
+                    1 for c in content
+                    if c.isupper()
+                )
 
-                percent = (upper / letters) * 100
+                percent = (
+                    upper / len(content)
+                ) * 100
 
-                if percent >= CAPS_PERCENT:
+                limit = int(
+                    self.get_setting(
+                        message.guild.id,
+                        "caps_limit"
+                    )
+                )
+
+                if percent >= limit:
+
+                    try:
+                        await message.delete()
+                    except:
+                        pass
 
                     await self.punish(
-                        message,
+                        message.author,
                         "Excessive caps"
                     )
 
@@ -258,188 +288,313 @@ class AutoMod(commands.Cog):
         # =========================
         # MENTION SPAM
         # =========================
-        if len(message.mentions) >= MENTION_LIMIT:
+        if self.get_setting(
+            message.guild.id,
+            "mention_enabled"
+        ) == "true":
 
-            await self.punish(
-                message,
-                "Mention spam"
+            limit = int(
+                self.get_setting(
+                    message.guild.id,
+                    "mention_limit"
+                )
             )
 
-            return
+            if len(message.mentions) >= limit:
 
-        # =========================
-        # DUPLICATE DETECTION
-        # =========================
-        duplicate_cache.setdefault(uid, [])
-
-        duplicate_cache[uid].append(message.content.lower())
-
-        duplicate_cache[uid] = duplicate_cache[uid][-DUPLICATE_LIMIT:]
-
-        if (
-            len(duplicate_cache[uid]) >= DUPLICATE_LIMIT
-            and len(set(duplicate_cache[uid])) == 1
-        ):
-
-            await self.punish(
-                message,
-                "Duplicate spam"
-            )
-
-            return
-
-        # =========================
-        # LINK DETECTION
-        # =========================
-        text = message.content.lower()
-
-        for link in BAD_LINKS:
-
-            if link in text:
+                try:
+                    await message.delete()
+                except:
+                    pass
 
                 await self.punish(
-                    message,
-                    "Suspicious link"
+                    message.author,
+                    "Mention spam"
                 )
 
                 return
 
         # =========================
-        # INVITE REGEX
+        # DUPLICATE
         # =========================
-        if re.search(r"(discord\.gg/|discord\.com/invite/)", text):
+        if self.get_setting(
+            message.guild.id,
+            "duplicate_enabled"
+        ) == "true":
 
-            await self.punish(
-                message,
-                "Discord invite detected"
+            uid = message.author.id
+
+            if (
+                uid in self.last_message
+                and self.last_message[uid] == content
+            ):
+
+                self.duplicates[uid] += 1
+
+            else:
+
+                self.duplicates[uid] = 1
+
+            self.last_message[uid] = content
+
+            limit = int(
+                self.get_setting(
+                    message.guild.id,
+                    "duplicate_limit"
+                )
             )
 
-            return
+            if self.duplicates[uid] >= limit:
+
+                try:
+                    await message.delete()
+                except:
+                    pass
+
+                await self.punish(
+                    message.author,
+                    "Duplicate spam"
+                )
+
+                self.duplicates[uid] = 0
+
+                return
+
+        # =========================
+        # INVITES
+        # =========================
+        if self.get_setting(
+            message.guild.id,
+            "invite_enabled"
+        ) == "true":
+
+            text = content.lower()
+
+            if (
+                "discord.gg/"
+                in text
+                or "discord.com/invite/"
+                in text
+            ):
+
+                try:
+                    await message.delete()
+                except:
+                    pass
+
+                await self.punish(
+                    message.author,
+                    "Server invite"
+                )
+
+                return
+
+        await self.bot.process_commands(message)
+
+    # =========================
+    # ENABLE
+    # =========================
+    @commands.hybrid_command(
+        name="automod_enable"
+    )
+    @commands.has_permissions(
+        administrator=True
+    )
+    async def automod_enable(
+        self,
+        ctx,
+        feature: str
+    ):
+
+        self.set_setting(
+            ctx.guild.id,
+            f"{feature}_enabled",
+            "true"
+        )
+
+        await ctx.send(
+            f"✅ Enabled `{feature}`"
+        )
+
+    # =========================
+    # DISABLE
+    # =========================
+    @commands.hybrid_command(
+        name="automod_disable"
+    )
+    @commands.has_permissions(
+        administrator=True
+    )
+    async def automod_disable(
+        self,
+        ctx,
+        feature: str
+    ):
+
+        self.set_setting(
+            ctx.guild.id,
+            f"{feature}_enabled",
+            "false"
+        )
+
+        await ctx.send(
+            f"❌ Disabled `{feature}`"
+        )
+
+    # =========================
+    # LIMIT
+    # =========================
+    @commands.hybrid_command(
+        name="automod_limit"
+    )
+    @commands.has_permissions(
+        administrator=True
+    )
+    async def automod_limit(
+        self,
+        ctx,
+        feature: str,
+        limit: int
+    ):
+
+        self.set_setting(
+            ctx.guild.id,
+            f"{feature}_limit",
+            limit
+        )
+
+        await ctx.send(
+            f"✅ {feature} limit set to `{limit}`"
+        )
+
+    # =========================
+    # PUNISHMENT
+    # =========================
+    @commands.hybrid_command(
+        name="automod_punishment"
+    )
+    @commands.has_permissions(
+        administrator=True
+    )
+    async def automod_punishment(
+        self,
+        ctx,
+        punishment: str
+    ):
+
+        punishment = punishment.lower()
+
+        if punishment not in [
+            "warn",
+            "timeout",
+            "kick",
+            "ban"
+        ]:
+            return await ctx.send(
+                "❌ Use: warn / timeout / kick / ban"
+            )
+
+        self.set_setting(
+            ctx.guild.id,
+            "punishment",
+            punishment
+        )
+
+        await ctx.send(
+            f"✅ Punishment set to `{punishment}`"
+        )
 
     # =========================
     # WHITELIST ADD
     # =========================
     @commands.hybrid_command(
-        name="automod_whitelist",
-        help="Whitelist a user from automod.",
-        extras={
-            "example": "!automod_whitelist @user",
-            "tips": "Trusted users only."
-        }
+        name="automod_whitelist_add"
     )
-    @commands.has_permissions(administrator=True)
-    async def automod_whitelist(
+    async def automod_whitelist_add(
         self,
         ctx,
-        user: discord.Member = None
+        member: discord.Member
     ):
-        """Whitelist a user."""
-
-        if not user:
-            return await ctx.send("❌ Usage: !automod_whitelist @user")
 
         cursor.execute(
-            "INSERT INTO automod_whitelist VALUES (?, ?)",
-            (ctx.guild.id, user.id)
+            """
+            INSERT INTO automod_whitelist
+            VALUES (?, ?)
+            """,
+            (
+                ctx.guild.id,
+                member.id
+            )
         )
 
         db.commit()
 
-        embed = embed_builder(
-            "✅ Whitelisted",
-            f"{user.mention} is now ignored by AutoMod.",
-            discord.Color.green()
+        await ctx.send(
+            f"✅ {member.mention} whitelisted"
         )
-
-        await ctx.send(embed=embed)
 
     # =========================
     # WHITELIST REMOVE
     # =========================
     @commands.hybrid_command(
-        name="automod_unwhitelist",
-        help="Remove automod whitelist.",
-        extras={
-            "example": "!automod_unwhitelist @user",
-            "tips": "User will be monitored again."
-        }
+        name="automod_whitelist_remove"
     )
-    @commands.has_permissions(administrator=True)
-    async def automod_unwhitelist(
+    async def automod_whitelist_remove(
         self,
         ctx,
-        user: discord.Member = None
+        member: discord.Member
     ):
-        """Remove whitelist."""
-
-        if not user:
-            return await ctx.send("❌ Usage: !automod_unwhitelist @user")
 
         cursor.execute(
-            "DELETE FROM automod_whitelist WHERE guild_id=? AND user_id=?",
-            (ctx.guild.id, user.id)
+            """
+            DELETE FROM automod_whitelist
+            WHERE guild_id=? AND user_id=?
+            """,
+            (
+                ctx.guild.id,
+                member.id
+            )
         )
 
         db.commit()
 
-        embed = embed_builder(
-            "❌ Removed Whitelist",
-            f"{user.mention} is now monitored again.",
-            discord.Color.red()
+        await ctx.send(
+            f"❌ Removed {member.mention}"
         )
 
-        await ctx.send(embed=embed)
-
     # =========================
-    # AUTOMOD STATUS
+    # STATUS
     # =========================
     @commands.hybrid_command(
-        name="automod",
-        help="View automod protections.",
-        extras={
-            "example": "!automod",
-            "tips": "Shows active detections."
-        }
+        name="automod_status"
     )
-    async def automod(self, ctx):
-        """View automod system."""
+    async def automod_status(
+        self,
+        ctx
+    ):
 
         embed = discord.Embed(
-            title="🛡️ Advanced AutoMod",
+            title="🛡️ AutoMod Settings",
             color=discord.Color.blurple()
         )
 
-        embed.add_field(
-            name="⚡ Spam Detection",
-            value=f"{SPAM_LIMIT} messages / {SPAM_TIME}s"
-        )
+        for key in DEFAULTS:
 
-        embed.add_field(
-            name="🔠 Caps Detection",
-            value=f"{CAPS_PERCENT}%+ caps"
-        )
+            value = self.get_setting(
+                ctx.guild.id,
+                key
+            )
 
-        embed.add_field(
-            name="🔔 Mention Spam",
-            value=f"{MENTION_LIMIT}+ mentions"
-        )
-
-        embed.add_field(
-            name="📄 Duplicate Detection",
-            value=f"{DUPLICATE_LIMIT} repeated messages"
-        )
-
-        embed.add_field(
-            name="🔗 Suspicious Links",
-            value="Enabled"
-        )
+            embed.add_field(
+                name=key,
+                value=value,
+                inline=False
+            )
 
         await ctx.send(embed=embed)
 
-
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
 
-    await bot.add_cog(AutoMod(bot))
+    await bot.add_cog(
+        AutoMod(bot)
+    )
