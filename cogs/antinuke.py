@@ -3,16 +3,12 @@ from discord.ext import commands
 from discord import app_commands
 import aiosqlite
 import time
+from utils.logger import save_log
 
-# Leaving your logger intact
-from utils.logger import get_logs, save_log, is_log_enabled
-
-# Pointing to our central asynchronous database
 DB_PATH = "bot.db"
+BRAND_COLOR = 0x2b2d31
 
-# =========================
-# ACTIONS & LIMITS
-# =========================
+# Module Choices
 ACTIONS = [
     app_commands.Choice(name="Banning Members", value="ban"),
     app_commands.Choice(name="Kicking Members", value="kick"),
@@ -20,23 +16,19 @@ ACTIONS = [
     app_commands.Choice(name="Creating Roles", value="role_create"),
     app_commands.Choice(name="Deleting Channels", value="channel_delete"),
     app_commands.Choice(name="Creating Channels", value="channel_create"),
-    app_commands.Choice(name="Dangerous Roles", value="dangerous_role"),
-    app_commands.Choice(name="Dangerous Permissions", value="dangerous_perm"),
 ]
 
+# Strict Limits (Actions per 10 seconds)
 LIMITS = {
     "ban": 3, "kick": 3, "role_delete": 2, "role_create": 2,
-    "channel_delete": 2, "channel_create": 2, "dangerous_role": 1, "dangerous_perm": 1
+    "channel_delete": 2, "channel_create": 2
 }
 
 TIME_WINDOW = 10
 
-# =========================
-# PRO MOD PANEL (Interactive UI)
-# =========================
 class ModPanel(discord.ui.View):
     def __init__(self, target_member: discord.Member, moderator: discord.Member):
-        super().__init__(timeout=120) # Times out after 2 mins to save memory
+        super().__init__(timeout=120)
         self.target = target_member
         self.moderator = moderator
 
@@ -48,43 +40,33 @@ class ModPanel(discord.ui.View):
 
     @discord.ui.button(label="Quarantine", style=discord.ButtonStyle.red, emoji="🛡️")
     async def quarantine_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Strips all roles to stop a nuke instantly
         try:
-            await self.target.edit(roles=[])
-            await interaction.response.send_message(f"🛡️ **{self.target.name}** has been quarantined (all roles removed).", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message("❌ Could not quarantine. Is my role high enough?", ephemeral=True)
+            await self.target.edit(roles=[], reason="Anti-Nuke Quarantine")
+            await interaction.response.send_message(f"🛡️ **{self.target.name}** quarantined.", ephemeral=True)
+        except:
+            await interaction.response.send_message("❌ Permission Error.", ephemeral=True)
 
     @discord.ui.button(label="Ban", style=discord.ButtonStyle.gray, emoji="🔨")
     async def ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            await self.target.ban(reason=f"Panel Ban by {interaction.user}")
+            await self.target.ban(reason=f"Emergency Panel Ban by {interaction.user}")
             await interaction.response.send_message(f"🔨 Banned **{self.target.name}**.", ephemeral=True)
         except:
-            await interaction.response.send_message("❌ Failed to ban. Check my permissions.", ephemeral=True)
+            await interaction.response.send_message("❌ Failed to ban.", ephemeral=True)
 
-
-# =========================
-# COG
-# =========================
 class AntiNuke(commands.Cog):
-    """
-    🛡️ Advanced Anti-Nuke System
-    Protects the server from rogue admins, raids, and mass deletions.
-    """
     def __init__(self, bot):
         self.bot = bot
-        self.actions = {}
+        self.action_tracker = {} # {(guild_id, user_id, action): [timestamps]}
 
     async def cog_load(self):
-        """Initializes tables asynchronously when the cog loads."""
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("CREATE TABLE IF NOT EXISTS antinuke_settings (guild_id INTEGER, action TEXT, enabled INTEGER, PRIMARY KEY (guild_id, action))")
-            await db.execute("CREATE TABLE IF NOT EXISTS antinuke_punish (guild_id INTEGER, user_id INTEGER, count INTEGER, PRIMARY KEY (guild_id, user_id))")
+            await db.execute("CREATE TABLE IF NOT EXISTS whitelist (guild_id INTEGER, user_id INTEGER, PRIMARY KEY (guild_id, user_id))")
             await db.commit()
 
     # =========================
-    # HELPERS
+    # LOGIC HELPERS
     # =========================
     async def is_enabled(self, gid, action):
         async with aiosqlite.connect(DB_PATH) as db:
@@ -93,85 +75,81 @@ class AntiNuke(commands.Cog):
                 return r is None or r[0] == 1
 
     async def is_whitelisted(self, gid, uid):
-        # Checks the central whitelist we made in database.py
         async with aiosqlite.connect(DB_PATH) as db:
             async with db.execute("SELECT 1 FROM whitelist WHERE guild_id=? AND user_id=?", (gid, uid)) as cursor:
                 return await cursor.fetchone() is not None
 
-    def track(self, uid, action):
+    def check_limit(self, gid, uid, action):
         now = time.time()
-        key = (uid, action)
-        self.actions.setdefault(key, []).append(now)
-        self.actions[key] = [t for t in self.actions[key] if now - t < TIME_WINDOW]
-        return len(self.actions[key])
+        key = (gid, uid, action)
+        self.action_tracker.setdefault(key, [])
+        self.action_tracker[key] = [t for t in self.action_tracker[key] if now - t < TIME_WINDOW]
+        self.action_tracker[key].append(now)
+        return len(self.action_tracker[key])
 
-    # =========================
-    # AUTO-RECOVERY & CHECKS
-    # =========================
-    @commands.Cog.listener()
-    async def on_guild_channel_delete(self, channel):
-        # 1. Advanced Recovery: Clone instead of creating blank
+    async def punish(self, guild, user, reason):
+        """The 'famous' hammer: Bans the admin and logs it."""
         try:
-            await channel.clone(name=channel.name, reason="AntiNuke: Channel Auto-Recovery")
+            await guild.ban(user, reason=f"Anti-Nuke: {reason}")
+            save_log(guild.id, 0, "antinuke", f"🚨 Banned {user} for {reason}")
         except:
             pass
 
-        # 2. Log & Check
-        async for entry in channel.guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
-            if entry.user.bot: return
-            whitelisted = await self.is_whitelisted(channel.guild.id, entry.user.id)
-            if whitelisted: return
+    # =========================
+    # LISTENERS (PROTECTION)
+    # =========================
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel):
+        guild = channel.guild
+        if not await self.is_enabled(guild.id, "channel_delete"): return
 
-            count = self.track(entry.user.id, "channel_delete")
-            if count >= LIMITS["channel_delete"]:
-                await self.punish(channel.guild, entry.user, "Mass Channel Deletion")
+        async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.channel_delete):
+            if entry.user.id == self.bot.user.id or await self.is_whitelisted(guild.id, entry.user.id): return
+            
+            # Auto-Recovery
+            await channel.clone(reason="Anti-Nuke: Auto-Recovery")
+            
+            if self.check_limit(guild.id, entry.user.id, "channel_delete") >= LIMITS["channel_delete"]:
+                await self.punish(guild, entry.user, "Mass Channel Deletion")
 
     # =========================
-    # COMMANDS (Secured & Styled)
+    # HYBRID COMMANDS
     # =========================
-    @commands.hybrid_command(name="enable", description="🛡️ Enable a specific anti-nuke module.")
-    @commands.has_permissions(administrator=True) # SECURITY FIX
+    @commands.hybrid_command(name="enable", description="🛡️ Enable an anti-nuke module.")
+    @commands.has_permissions(administrator=True)
+    @app_commands.describe(action="Module to enable")
     @app_commands.choices(action=ACTIONS)
     async def enable(self, ctx, action: app_commands.Choice[str]):
-        """Enable a protection module (Admins Only)."""
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT OR REPLACE INTO antinuke_settings VALUES (?, ?, 1)", (ctx.guild.id, action.value))
             await db.commit()
+        await ctx.send(embed=discord.Embed(description=f"✅ **{action.name}** enabled.", color=discord.Color.green()))
 
-        embed = discord.Embed(title="🛡️ Anti-Nuke Updated", description=f"**{action.name}** protection is now `ENABLED`.", color=discord.Color.green())
-        await ctx.send(embed=embed)
+    @commands.hybrid_command(name="disable", description="❌ Disable an anti-nuke module.")
+    @commands.has_permissions(administrator=True)
+    @app_commands.describe(action="Module to disable")
+    @app_commands.choices(action=ACTIONS)
+    async def disable(self, ctx, action: app_commands.Choice[str]):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("INSERT OR REPLACE INTO antinuke_settings VALUES (?, ?, 0)", (ctx.guild.id, action.value))
+            await db.commit()
+        await ctx.send(embed=discord.Embed(description=f"❌ **{action.name}** disabled.", color=discord.Color.red()))
 
-    @commands.hybrid_command(name="whitelist_add", description="🛡️ Whitelist a trusted admin from Anti-Nuke triggers.")
-    @commands.has_permissions(administrator=True) # SECURITY FIX
+    @commands.hybrid_command(name="whitelist_add", description="🛡️ Trust a user to bypass Anti-Nuke.")
+    @commands.has_permissions(administrator=True)
     async def whitelist_add(self, ctx, user: discord.Member):
-        """Add a user to the whitelist (Admins Only)."""
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("INSERT OR REPLACE INTO whitelist VALUES (?, ?)", (ctx.guild.id, user.id))
             await db.commit()
+        await ctx.send(f"✅ {user.mention} is now whitelisted.")
 
-        embed = discord.Embed(description=f"✅ {user.mention} is now **whitelisted** and bypasses Anti-Nuke.", color=0x2b2d31)
-        await ctx.send(embed=embed)
-
-    @commands.hybrid_command(name="panel", description="⚖️ Open the advanced moderation panel for a user.")
+    @commands.hybrid_command(name="antinuke_panel", description="⚖️ Open emergency mod panel.")
     @commands.has_permissions(manage_messages=True)
+    @app_commands.describe(member="Member to manage")
     async def panel(self, ctx, member: discord.Member):
-        """Open an interactive moderation UI (Mods Only)."""
-        embed = discord.Embed(
-            title="⚖️ Moderation Control Panel",
-            description=f"**Target User:** {member.mention}\n**ID:** `{member.id}`\n\nSelect an action below.",
-            color=0x2b2d31 # Pro Discord aesthetic color
-        )
+        embed = discord.Embed(title="🛡️ Security Panel", description=f"Managing: {member.mention}", color=BRAND_COLOR)
         embed.set_thumbnail(url=member.display_avatar.url)
-        
-        await ctx.send(embed=embed, view=ModPanel(target_member=member, moderator=ctx.author))
-
-    # Error handler for the missing permissions
-    @enable.error
-    @whitelist_add.error
-    @panel.error
-    async def permission_error(self, ctx, error):
-        if isinstance(error, commands.MissingPermissions):
-            await ctx.send(embed=discord.Embed(description="❌ You lack the permissions to use this command.", color=discord.Color.red()), ephemeral=True)
+        await ctx.send(embed=embed, view=ModPanel(member, ctx.author))
 
 async def setup(bot):
     await bot.add_cog(AntiNuke(bot))
