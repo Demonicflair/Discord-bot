@@ -2,14 +2,14 @@ import aiosqlite
 import os
 
 # For Railway, this path works best. 
-# Ensure you have a Railway Volume mounted to "bot.db" if you want data to persist.
 DB_PATH = "bot.db"
 
 async def initialize_db():
-    """Initializes the database and creates tables if they don't exist."""
+    """Initializes the database with high-performance settings."""
     async with aiosqlite.connect(DB_PATH) as db:
-        # Enable WAL mode for high performance (allows concurrent reads/writes)
+        # WAL mode prevents 'database is locked' errors during heavy use
         await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA synchronous=NORMAL")
         
         # Levels Table
         await db.execute("""
@@ -32,7 +32,7 @@ async def initialize_db():
             )
         """)
         
-        # Whitelist Table (Used for Anti-Nuke/Security)
+        # Whitelist Table
         await db.execute("""
             CREATE TABLE IF NOT EXISTS whitelist (
                 user_id INTEGER, 
@@ -42,10 +42,14 @@ async def initialize_db():
         """)
         
         await db.commit()
-    print("✅ Database initialized and optimized.")
+    print("✨ Database optimized for high traffic.")
+
+# =========================
+# NEW & UPGRADED COMMANDS
+# =========================
 
 async def add_xp(u, g, amt):
-    """Adds XP and handles leveling logic."""
+    """Adds XP with a smoother leveling curve."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
             "SELECT xp, level FROM levels WHERE user_id=? AND guild_id=?", (u, g)
@@ -58,8 +62,8 @@ async def add_xp(u, g, amt):
             xp, level = d[0] + amt, d[1]
 
         leveled = False
-        # Advanced math: Leveling gets harder as you go (Level * 150)
-        xp_needed = level * 150 
+        # Famous bots use a dynamic curve: level * level * 100
+        xp_needed = (level ** 2) * 100 
         if xp >= xp_needed:
             xp = 0
             level += 1
@@ -72,36 +76,18 @@ async def add_xp(u, g, amt):
         await db.commit()
         return level, leveled
 
-async def get_lb(g):
-    """Returns the top 10 users in a specific guild."""
+async def get_user_stats(u, g):
+    """New: Quick fetch for a user's full profile."""
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT user_id, level FROM levels WHERE guild_id=? ORDER BY level DESC LIMIT 10",
-            (g,)
+            "SELECT xp, level FROM levels WHERE user_id=? AND guild_id=?", (u, g)
         ) as cursor:
-            return await cursor.fetchall()
+            return await cursor.fetchone()
 
-async def add_warn(u, g):
-    """Increments the warning count for a user."""
+async def remove_whitelist(u, g):
+    """New: Easily remove a user from security whitelist."""
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT count FROM warnings WHERE user_id=? AND guild_id=?", (u, g)
-        ) as cursor:
-            d = await cursor.fetchone()
-            
-        count = (d[0] + 1) if d else 1
-
-        await db.execute(
-            "INSERT OR REPLACE INTO warnings (user_id, guild_id, count) VALUES (?, ?, ?)",
-            (u, g, count)
-        )
-        await db.commit()
-        return count
-
-async def add_whitelist(u, g):
-    """Adds a user to the security whitelist."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("INSERT OR REPLACE INTO whitelist VALUES (?, ?)", (u, g))
+        await db.execute("DELETE FROM whitelist WHERE user_id=? AND guild_id=?", (u, g))
         await db.commit()
 
 async def is_whitelisted(u, g):
@@ -112,4 +98,3 @@ async def is_whitelisted(u, g):
         ) as cursor:
             result = await cursor.fetchone()
             return result is not None
-            
