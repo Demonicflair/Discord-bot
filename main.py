@@ -4,85 +4,85 @@ import asyncio
 import os
 import time
 import traceback
-import sqlite3
+import sys
 
-# Import your other files
+# Add current directory to path so Railway finds your files easily
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+
 import config
 import database 
 
 # =========================
-# DYNAMIC PREFIX
-# =========================
-prefix_db = sqlite3.connect("prefixes.db", check_same_thread=False)
-prefix_cursor = prefix_db.cursor()
-prefix_cursor.execute("CREATE TABLE IF NOT EXISTS prefixes(guild_id INTEGER PRIMARY KEY, prefix TEXT)")
-prefix_db.commit()
-
-def get_prefix(bot, message):
-    if not message.guild:
-        return "!"
-    prefix_cursor.execute("SELECT prefix FROM prefixes WHERE guild_id=?", (message.guild.id,))
-    data = prefix_cursor.fetchone()
-    return data[0] if data else "!"
-
-# =========================
 # BOT SETUP
 # =========================
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
-intents.guilds = True
+intents = discord.Intents.all() # Using .all() to ensure no 'Missing Intents' errors on Railway
 
-bot = commands.Bot(
-    command_prefix=get_prefix,
-    intents=intents,
-    help_command=None,
-    case_insensitive=True
-)
+class EliteBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix=self.get_dynamic_prefix,
+            intents=intents,
+            help_command=None,
+            case_insensitive=True
+        )
 
-startup_time = time.time()
+    async def get_dynamic_prefix(self, bot, message):
+        if not message.guild:
+            return "!"
+        try:
+            # Reusing your prefix logic but making it safer
+            import sqlite3
+            conn = sqlite3.connect("prefixes.db")
+            cur = conn.cursor()
+            cur.execute("SELECT prefix FROM prefixes WHERE guild_id=?", (message.guild.id,))
+            res = cur.fetchone()
+            conn.close()
+            return res[0] if res else "!"
+        except:
+            return "!"
 
-# =========================
-# LOAD COGS
-# =========================
-async def load_cogs():
-    for filename in os.listdir("./cogs"):
-        if filename.endswith(".py"):
-            try:
-                await bot.load_extension(f"cogs.{filename[:-3]}")
-                print(f"✅ Loaded: {filename}")
-            except Exception as e:
-                print(f"❌ Failed {filename}: {e}")
+    async def setup_hook(self):
+        # This is the NEW way to load cogs in discord.py 2.0+
+        print("🚀 Loading Cogs...")
+        for filename in os.listdir("./cogs"):
+            if filename.endswith(".py"):
+                try:
+                    await self.load_extension(f"cogs.{filename[:-3]}")
+                    print(f"✅ {filename} loaded.")
+                except Exception as e:
+                    print(f"❌ {filename} failed: {e}")
+        
+        # Syncing Slash Commands
+        await self.tree.sync()
+        print("🔗 Slash Commands Synced.")
+
+bot = EliteBot()
 
 # =========================
 # READY EVENT
 # =========================
 @bot.event
 async def on_ready():
-    # Initialize the database correctly
-    try:
-        await database.initialize_db()
-        print("🗄️ Database Ready")
-    except Exception as e:
-        print(f"⚠️ DB Init Error: {e}")
-
-    # Sync Slash Commands
-    try:
-        await bot.tree.sync()
-        print(f"✅ Slash Commands Synced")
-    except Exception as e:
-        print(f"⚠️ Sync Error: {e}")
-
-    print(f"🤖 Connected as: {bot.user}")
+    await database.initialize_db()
+    
+    # Famous Bot Look: Custom Console Banner
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"🛡️  {bot.user.name} is now PROTECTING {len(bot.guilds)} servers")
+    print(f"📡  Latency: {round(bot.latency * 1000)}ms")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 # =========================
-# RUN BOT
+# RUNNING THE BOT
 # =========================
-async def main():
+async def start_bot():
     async with bot:
-        await load_cogs()
-        # Make sure TOKEN is exactly as it is in Railway variables
-        await bot.start(config.TOKEN)
+        try:
+            await bot.start(config.TOKEN)
+        except discord.LoginFailure:
+            print("❌ ERROR: Invalid Token in config.py or Railway Variables!")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        pass
