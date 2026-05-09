@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS verification(
 db.commit()
 
 # =========================
-# DEFAULT FEATURES
+# DEFAULTS
 # =========================
 DEFAULTS = {
     "spam": (1, 6, "timeout"),
@@ -72,7 +72,6 @@ DEFAULTS = {
 # =========================
 TOXIC_WORDS = [
     "kys",
-    "die",
     "kill yourself",
     "retard",
     "fatherless",
@@ -84,8 +83,7 @@ SCAM_WORDS = [
     "steam gift",
     "claim reward",
     "free robux",
-    "bitcoin giveaway",
-    "limited offer"
+    "bitcoin giveaway"
 ]
 
 INVITE_REGEX = r"(discord\.gg\/|discord\.com\/invite\/)"
@@ -210,6 +208,26 @@ class AdvancedAutomod(commands.Cog):
         db.commit()
 
     # =========================
+    # WHITELIST
+    # =========================
+    def is_whitelisted(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        cursor.execute(
+            """
+            SELECT *
+            FROM whitelist
+            WHERE guild_id=? AND user_id=?
+            """,
+            (guild_id, user_id)
+        )
+
+        return cursor.fetchone() is not None
+
+    # =========================
     # WARN SYSTEM
     # =========================
     def get_warns(self, guild_id, user_id):
@@ -255,26 +273,6 @@ class AdvancedAutomod(commands.Cog):
         return warns
 
     # =========================
-    # WHITELIST
-    # =========================
-    def is_whitelisted(
-        self,
-        guild_id,
-        user_id
-    ):
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM whitelist
-            WHERE guild_id=? AND user_id=?
-            """,
-            (guild_id, user_id)
-        )
-
-        return cursor.fetchone() is not None
-
-    # =========================
     # PUNISHMENT
     # =========================
     async def execute_punishment(
@@ -293,11 +291,14 @@ class AdvancedAutomod(commands.Cog):
                     member.id
                 )
 
-                await member.send(
-                    f"⚠️ Warning in {member.guild.name}\n"
-                    f"Reason: {reason}\n"
-                    f"Warnings: {warns}"
-                )
+                try:
+                    await member.send(
+                        f"⚠️ Warning in {member.guild.name}\n"
+                        f"Reason: {reason}\n"
+                        f"Warnings: {warns}"
+                    )
+                except:
+                    pass
 
             elif punishment == "timeout":
 
@@ -328,10 +329,15 @@ class AdvancedAutomod(commands.Cog):
     @commands.Cog.listener()
     async def on_message(self, message):
 
-        if (
-            not message.guild
-            or message.author.bot
-        ):
+        if not message.guild:
+            return
+
+        if message.author.bot:
+            return
+
+        ctx = await self.bot.get_context(message)
+
+        if ctx.valid:
             return
 
         if self.is_whitelisted(
@@ -385,33 +391,31 @@ class AdvancedAutomod(commands.Cog):
             "caps"
         )
 
-        if enabled:
+        if enabled and len(content) >= 8:
 
-            if len(content) >= 8:
+            upper = sum(
+                1 for c in message.content
+                if c.isupper()
+            )
 
-                upper = sum(
-                    1 for c in content
-                    if c.isupper()
+            percent = (
+                upper / len(message.content)
+            ) * 100
+
+            if percent >= limit:
+
+                try:
+                    await message.delete()
+                except:
+                    pass
+
+                await self.execute_punishment(
+                    message.author,
+                    punishment,
+                    "Excessive caps"
                 )
 
-                percent = (
-                    upper / len(content)
-                ) * 100
-
-                if percent >= limit:
-
-                    try:
-                        await message.delete()
-                    except:
-                        pass
-
-                    await self.execute_punishment(
-                        message.author,
-                        punishment,
-                        "Excessive caps"
-                    )
-
-                    return
+                return
 
         # =========================
         # INVITES
@@ -496,7 +500,7 @@ class AdvancedAutomod(commands.Cog):
                     return
 
         # =========================
-        # DUPLICATES
+        # DUPLICATE
         # =========================
         enabled, limit, punishment = self.get_feature(
             message.guild.id,
@@ -589,13 +593,14 @@ class AdvancedAutomod(commands.Cog):
             [m.id for m in message.mentions]
         )
 
-        await self.bot.process_commands(message)
-
     # =========================
-    # GHOST PING
+    # GHOSTPING
     # =========================
     @commands.Cog.listener()
     async def on_message_delete(self, message):
+
+        if not message.guild:
+            return
 
         enabled, limit, punishment = self.get_feature(
             message.guild.id,
@@ -612,16 +617,11 @@ class AdvancedAutomod(commands.Cog):
 
         if mentions:
 
-            text = " ".join(
-                f"<@{x}>"
-                for x in mentions
-            )
-
             embed = discord.Embed(
-                title="👻 Ghost Ping",
+                title="👻 Ghost Ping Detected",
                 description=(
                     f"Author: <@{author_id}>\n"
-                    f"Mentions: {text}"
+                    f"Mentions: {' '.join(f'<@{m}>' for m in mentions)}"
                 ),
                 color=discord.Color.red()
             )
@@ -672,21 +672,11 @@ class AdvancedAutomod(commands.Cog):
                 pass
 
     # =========================
-    # ENABLE
+    # COMMANDS
     # =========================
-    @commands.hybrid_command(
-        name="automod_enable",
-        help="Enable an automod feature.",
-        extras={
-            "example": "!automod_enable spam",
-            "tips": "Enable protections individually."
-        }
-    )
-    async def automod_enable(
-        self,
-        ctx,
-        feature: str
-    ):
+    @commands.hybrid_command()
+    @commands.has_permissions(administrator=True)
+    async def automod_enable(self, ctx, feature: str):
 
         if feature not in DEFAULTS:
             return await ctx.send("❌ Invalid feature")
@@ -704,26 +694,11 @@ class AdvancedAutomod(commands.Cog):
             punishment
         )
 
-        await ctx.send(
-            f"✅ Enabled `{feature}`"
-        )
+        await ctx.send(f"✅ Enabled `{feature}`")
 
-    # =========================
-    # DISABLE
-    # =========================
-    @commands.hybrid_command(
-        name="automod_disable",
-        help="Disable an automod feature.",
-        extras={
-            "example": "!automod_disable spam",
-            "tips": "Disable protections individually."
-        }
-    )
-    async def automod_disable(
-        self,
-        ctx,
-        feature: str
-    ):
+    @commands.hybrid_command()
+    @commands.has_permissions(administrator=True)
+    async def automod_disable(self, ctx, feature: str):
 
         if feature not in DEFAULTS:
             return await ctx.send("❌ Invalid feature")
@@ -741,21 +716,10 @@ class AdvancedAutomod(commands.Cog):
             punishment
         )
 
-        await ctx.send(
-            f"❌ Disabled `{feature}`"
-        )
+        await ctx.send(f"❌ Disabled `{feature}`")
 
-    # =========================
-    # LIMIT
-    # =========================
-    @commands.hybrid_command(
-        name="automod_limit",
-        help="Change automod limits.",
-        extras={
-            "example": "!automod_limit spam 10",
-            "tips": "Higher values make automod less strict."
-        }
-    )
+    @commands.hybrid_command()
+    @commands.has_permissions(administrator=True)
     async def automod_limit(
         self,
         ctx,
@@ -783,17 +747,8 @@ class AdvancedAutomod(commands.Cog):
             f"✅ `{feature}` limit set to `{limit}`"
         )
 
-    # =========================
-    # PUNISHMENT
-    # =========================
-    @commands.hybrid_command(
-        name="automod_punishment",
-        help="Change punishments.",
-        extras={
-            "example": "!automod_punishment spam timeout",
-            "tips": "Use warn/timeout/kick/ban."
-        }
-    )
+    @commands.hybrid_command()
+    @commands.has_permissions(administrator=True)
     async def automod_punishment(
         self,
         ctx,
@@ -830,21 +785,11 @@ class AdvancedAutomod(commands.Cog):
             f"✅ `{feature}` punishment set to `{punishment}`"
         )
 
-    # =========================
-    # STATUS
-    # =========================
-    @commands.hybrid_command(
-        name="automod_status",
-        help="View automod settings.",
-        extras={
-            "example": "!automod_status",
-            "tips": "Shows all automod systems."
-        }
-    )
+    @commands.hybrid_command()
     async def automod_status(self, ctx):
 
         embed = discord.Embed(
-            title="🛡️ AutoMod Settings",
+            title="🛡️ AutoMod Status",
             color=discord.Color.blurple()
         )
 
@@ -866,89 +811,6 @@ class AdvancedAutomod(commands.Cog):
             )
 
         await ctx.send(embed=embed)
-
-    # =========================
-    # WARNINGS
-    # =========================
-    @commands.hybrid_command(
-        name="warnings",
-        help="View user warnings.",
-        extras={
-            "example": "!warnings @user",
-            "tips": "Tracks user punishments."
-        }
-    )
-    async def warnings(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        warns = self.get_warns(
-            ctx.guild.id,
-            member.id
-        )
-
-        embed = discord.Embed(
-            title="⚠️ Warnings",
-            description=(
-                f"{member.mention} has "
-                f"`{warns}` warning(s)."
-            ),
-            color=discord.Color.orange()
-        )
-
-        await ctx.send(embed=embed)
-
-    # =========================
-    # VERIFY SETUP
-    # =========================
-    @commands.hybrid_command(
-        name="setupverify",
-        help="Setup verification system.",
-        extras={
-            "example": "!setupverify @Verified",
-            "tips": "Users click a button to verify."
-        }
-    )
-    async def setupverify(
-        self,
-        ctx,
-        role: discord.Role
-    ):
-
-        cursor.execute(
-            """
-            DELETE FROM verification
-            WHERE guild_id=?
-            """,
-            (ctx.guild.id,)
-        )
-
-        cursor.execute(
-            """
-            INSERT INTO verification
-            VALUES (?, ?, ?)
-            """,
-            (
-                ctx.guild.id,
-                role.id,
-                ctx.channel.id
-            )
-        )
-
-        db.commit()
-
-        embed = discord.Embed(
-            title="✅ Verification",
-            description="Click below to verify.",
-            color=discord.Color.green()
-        )
-
-        await ctx.send(
-            embed=embed,
-            view=VerifyView()
-        )
 
 async def setup(bot):
 
