@@ -1,489 +1,158 @@
-# welcome.py
-
 import discord
 from discord.ext import commands
-import sqlite3
+from discord import app_commands
+import aiosqlite
+import datetime
 
-from utils.logger import get_logs, save_log, is_log_enabled
+DB_PATH = "bot.db"
+BRAND_COLOR = 0x2b2d31
 
-# =========================
-# DATABASE
-# =========================
-db = sqlite3.connect("welcome.db", check_same_thread=False)
-cursor = db.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS welcome_settings(
-    guild_id INTEGER PRIMARY KEY,
-    welcome_channel INTEGER,
-    leave_channel INTEGER,
-    welcome_message TEXT,
-    leave_message TEXT,
-    autorole INTEGER
-)
-""")
-
-db.commit()
-
-# =========================
-# EMBED
-# =========================
-def build_embed(title, desc, color):
-
-    embed = discord.Embed(
-        title=title,
-        description=desc,
-        color=color,
-        timestamp=discord.utils.utcnow()
-    )
-
-    return embed
-
-
-# =========================
-# COG
-# =========================
 class Welcome(commands.Cog):
-
     def __init__(self, bot):
-
         self.bot = bot
 
-    # =========================
-    # FETCH SETTINGS
-    # =========================
-    def get_data(self, guild_id):
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS welcome_settings (
+                    guild_id INTEGER PRIMARY KEY,
+                    welcome_channel INTEGER,
+                    leave_channel INTEGER,
+                    welcome_message TEXT DEFAULT 'Welcome {user} to {server}!',
+                    leave_message TEXT DEFAULT '{user} has left {server}.',
+                    autorole INTEGER,
+                    use_embed INTEGER DEFAULT 1,
+                    embed_color TEXT DEFAULT '2b2d31',
+                    show_thumbnail INTEGER DEFAULT 1
+                )
+            """)
+            await db.commit()
 
-        cursor.execute(
-            "SELECT * FROM welcome_settings WHERE guild_id=?",
-            (guild_id,)
-        )
-
-        return cursor.fetchone()
+    # =========================
+    # THE DEM VARIABLE ENGINE
+    # =========================
+    def format_msg(self, text, member: discord.Member):
+        vars = {
+            "{user}": member.mention,
+            "{user_name}": member.name,
+            "{user_id}": str(member.id),
+            "{server}": member.guild.name,
+            "{member_count}": str(member.guild.member_count),
+            "{count_suffix}": "th" if str(member.guild.member_count).endswith(("11", "12", "13")) else {1: "st", 2: "nd", 3: "rd"}.get(member.guild.member_count % 10, "th"),
+            "{created_at}": f"<t:{int(member.created_at.timestamp())}:R>",
+            "{owner}": member.guild.owner.mention
+        }
+        for key, value in vars.items():
+            text = text.replace(key, value)
+        return text
 
     # =========================
-    # MEMBER JOIN
+    # INTERNAL SENDERS (For Events & Tests)
+    # =========================
+    async def send_welcome(self, member):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT * FROM welcome_settings WHERE guild_id=?", (member.guild.id,)) as cur:
+                data = await cur.fetchone()
+        
+        if not data or not data[1]: return
+        w_chan, w_msg, use_embed, color, thumb = data[1], data[3], data[6], data[7], data[8]
+        
+        channel = member.guild.get_channel(w_chan)
+        if channel:
+            desc = self.format_msg(w_msg, member)
+            if use_embed:
+                embed = discord.Embed(description=desc, color=int(color, 16), timestamp=discord.utils.utcnow())
+                if thumb: embed.set_thumbnail(url=member.display_avatar.url)
+                embed.set_author(name=f"Welcome to {member.guild.name}", icon_url=member.guild.icon.url if member.guild.icon else None)
+                await channel.send(content=member.mention, embed=embed)
+            else:
+                await channel.send(desc)
+
+    async def send_leave(self, member):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT * FROM welcome_settings WHERE guild_id=?", (member.guild.id,)) as cur:
+                data = await cur.fetchone()
+        
+        if not data or not data[2]: return
+        l_chan, l_msg, color = data[2], data[4], data[7]
+        
+        channel = member.guild.get_channel(l_chan)
+        if channel:
+            desc = self.format_msg(l_msg, member)
+            embed = discord.Embed(description=desc, color=int(color, 16))
+            embed.set_footer(text="Member Left Dem System")
+            await channel.send(embed=embed)
+
+    # =========================
+    # LISTENERS
     # =========================
     @commands.Cog.listener()
     async def on_member_join(self, member):
+        await self.send_welcome(member)
+        # Autorole Logic
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT autorole FROM welcome_settings WHERE guild_id=?", (member.guild.id,)) as cur:
+                res = await cur.fetchone()
+                if res and res[0]:
+                    role = member.guild.get_role(res[0])
+                    if role: await member.add_roles(role)
 
-        data = self.get_data(member.guild.id)
-
-        if not data:
-            return
-
-        channel_id = data[1]
-        message = data[3]
-        autorole = data[5]
-
-        channel = member.guild.get_channel(channel_id)
-
-        if autorole:
-
-            role = member.guild.get_role(autorole)
-
-            if role:
-
-                try:
-                    await member.add_roles(role)
-
-                except:
-                    pass
-
-        if channel:
-
-            text = (
-                message
-                .replace("{user}", member.mention)
-                .replace("{server}", member.guild.name)
-                .replace("{members}", str(member.guild.member_count))
-            )
-
-            embed = build_embed(
-                "👋 Welcome",
-                text,
-                discord.Color.green()
-            )
-
-            embed.set_thumbnail(
-                url=member.display_avatar.url
-            )
-
-            await channel.send(embed=embed)
-
-        logs = get_logs(member.guild.id)
-
-        if logs and is_log_enabled(member.guild.id, "welcome"):
-
-            log_channel = member.guild.get_channel(logs[1])
-
-            if log_channel:
-
-                await log_channel.send(
-                    embed=build_embed(
-                        "📥 Member Joined",
-                        f"{member.mention} joined the server.",
-                        discord.Color.green()
-                    )
-                )
-
-        save_log(
-            member.guild.id,
-            member.id,
-            "welcome",
-            f"{member} joined"
-        )
-
-    # =========================
-    # MEMBER LEAVE
-    # =========================
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-
-        data = self.get_data(member.guild.id)
-
-        if not data:
-            return
-
-        channel_id = data[2]
-        message = data[4]
-
-        channel = member.guild.get_channel(channel_id)
-
-        if channel:
-
-            text = (
-                message
-                .replace("{user}", str(member))
-                .replace("{server}", member.guild.name)
-                .replace("{members}", str(member.guild.member_count))
-            )
-
-            embed = build_embed(
-                "💔 Member Left",
-                text,
-                discord.Color.red()
-            )
-
-            embed.set_thumbnail(
-                url=member.display_avatar.url
-            )
-
-            await channel.send(embed=embed)
-
-        logs = get_logs(member.guild.id)
-
-        if logs and is_log_enabled(member.guild.id, "welcome"):
-
-            log_channel = member.guild.get_channel(logs[1])
-
-            if log_channel:
-
-                await log_channel.send(
-                    embed=build_embed(
-                        "📤 Member Left",
-                        f"{member} left the server.",
-                        discord.Color.red()
-                    )
-                )
-
-        save_log(
-            member.guild.id,
-            member.id,
-            "welcome",
-            f"{member} left"
-        )
+        await self.send_leave(member)
 
     # =========================
-    # SET WELCOME CHANNEL
+    # HYBRID COMMANDS
     # =========================
-    @commands.hybrid_command(
-        name="setwelcomechannel",
-        help="Set welcome channel.",
-        extras={
-            "example": "!setwelcomechannel #welcome",
-            "tips": "Members will be welcomed there."
-        }
-    )
+    @commands.hybrid_group(name="welcome", description="Dem Welcome System configuration.")
     @commands.has_permissions(administrator=True)
-    async def setwelcomechannel(
-        self,
-        ctx,
-        channel: discord.TextChannel = None
-    ):
-        """Set welcome channel."""
+    async def welcome(self, ctx):
+        if ctx.invoked_subcommand is None:
+            await ctx.send_help(ctx.command)
 
-        if not channel:
+    @welcome.command(name="test_greet", description="🧪 Test the Welcome (Greet) message.")
+    async def test_greet(self, ctx):
+        await self.send_welcome(ctx.author)
+        await ctx.send("✅ Sent a test **Welcome** message.", ephemeral=True)
 
-            return await ctx.send(
-                "❌ Usage: !setwelcomechannel #channel"
-            )
+    @welcome.command(name="test_leave", description="🧪 Test the Leave message.")
+    async def test_leave(self, ctx):
+        await self.send_leave(ctx.author)
+        await ctx.send("✅ Sent a test **Leave** message.", ephemeral=True)
 
-        cursor.execute(
-            "INSERT OR REPLACE INTO welcome_settings(guild_id, welcome_channel) VALUES (?, ?)",
-            (ctx.guild.id, channel.id)
+    @welcome.command(name="variables", description="📖 View all available placeholders for Dem.")
+    async def variables(self, ctx):
+        embed = discord.Embed(title="📖 Dem Variable Guide", color=BRAND_COLOR)
+        embed.description = (
+            "`{user}` - Mentions the user\n"
+            "`{user_name}` - Plain username\n"
+            "`{server}` - Server Name\n"
+            "`{member_count}` - Total members\n"
+            "`{count_suffix}` - st, nd, rd, th\n"
+            "`{created_at}` - Account age\n"
+            "`{owner}` - Mentions the owner"
         )
-
-        db.commit()
-
-        await ctx.send(
-            embed=build_embed(
-                "✅ Welcome Channel Set",
-                f"{channel.mention}",
-                discord.Color.green()
-            )
-        )
-
-    # =========================
-    # SET LEAVE CHANNEL
-    # =========================
-    @commands.hybrid_command(
-        name="setleavechannel",
-        help="Set leave channel.",
-        extras={
-            "example": "!setleavechannel #goodbye",
-            "tips": "Leave logs go there."
-        }
-    )
-    @commands.has_permissions(administrator=True)
-    async def setleavechannel(
-        self,
-        ctx,
-        channel: discord.TextChannel = None
-    ):
-        """Set leave channel."""
-
-        if not channel:
-
-            return await ctx.send(
-                "❌ Usage: !setleavechannel #channel"
-            )
-
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO
-            welcome_settings(guild_id, leave_channel)
-            VALUES (?, ?)
-            """,
-            (ctx.guild.id, channel.id)
-        )
-
-        db.commit()
-
-        await ctx.send(
-            embed=build_embed(
-                "✅ Leave Channel Set",
-                f"{channel.mention}",
-                discord.Color.green()
-            )
-        )
-
-    # =========================
-    # SET WELCOME MESSAGE
-    # =========================
-    @commands.hybrid_command(
-        name="setwelcome",
-        help="Set welcome message.",
-        extras={
-            "example": "!setwelcome Welcome {user}",
-            "tips": "Use {user}, {server}, {members}"
-        }
-    )
-    @commands.has_permissions(administrator=True)
-    async def setwelcome(
-        self,
-        ctx,
-        *,
-        message=None
-    ):
-        """Set welcome message."""
-
-        if not message:
-
-            return await ctx.send(
-                "❌ Usage: !setwelcome <message>"
-            )
-
-        cursor.execute(
-            """
-            UPDATE welcome_settings
-            SET welcome_message=?
-            WHERE guild_id=?
-            """,
-            (message, ctx.guild.id)
-        )
-
-        db.commit()
-
-        await ctx.send("✅ Welcome message updated.")
-
-    # =========================
-    # SET LEAVE MESSAGE
-    # =========================
-    @commands.hybrid_command(
-        name="setleave",
-        help="Set leave message.",
-        extras={
-            "example": "!setleave Goodbye {user}",
-            "tips": "Use variables."
-        }
-    )
-    @commands.has_permissions(administrator=True)
-    async def setleave(
-        self,
-        ctx,
-        *,
-        message=None
-    ):
-        """Set leave message."""
-
-        if not message:
-
-            return await ctx.send(
-                "❌ Usage: !setleave <message>"
-            )
-
-        cursor.execute(
-            """
-            UPDATE welcome_settings
-            SET leave_message=?
-            WHERE guild_id=?
-            """,
-            (message, ctx.guild.id)
-        )
-
-        db.commit()
-
-        await ctx.send("✅ Leave message updated.")
-
-    # =========================
-    # AUTOROLE
-    # =========================
-    @commands.hybrid_command(
-        name="setautorole",
-        help="Set auto role.",
-        extras={
-            "example": "!setautorole @Member",
-            "tips": "New users get this role."
-        }
-    )
-    @commands.has_permissions(manage_roles=True)
-    async def setautorole(
-        self,
-        ctx,
-        role: discord.Role = None
-    ):
-        """Set autorole."""
-
-        if not role:
-
-            return await ctx.send(
-                "❌ Usage: !setautorole @role"
-            )
-
-        cursor.execute(
-            """
-            UPDATE welcome_settings
-            SET autorole=?
-            WHERE guild_id=?
-            """,
-            (role.id, ctx.guild.id)
-        )
-
-        db.commit()
-
-        await ctx.send(
-            f"✅ Autorole set to {role.mention}"
-        )
-
-    # =========================
-    # TEST WELCOME
-    # =========================
-    @commands.hybrid_command(
-        name="testwelcome",
-        help="Test welcome message.",
-        extras={
-            "example": "!testwelcome",
-            "tips": "Preview the welcome."
-        }
-    )
-    async def testwelcome(self, ctx):
-        """Test welcome."""
-
-        member = ctx.author
-
-        embed = build_embed(
-            "👋 Welcome",
-            (
-                f"Welcome {member.mention}\n"
-                f"You are member #{ctx.guild.member_count}"
-            ),
-            discord.Color.green()
-        )
-
-        embed.set_thumbnail(
-            url=member.display_avatar.url
-        )
-
         await ctx.send(embed=embed)
 
-    # =========================
-    # CONFIG
-    # =========================
-    @commands.hybrid_command(
-        name="welcomeconfig",
-        help="View welcome configuration.",
-        extras={
-            "example": "!welcomeconfig",
-            "tips": "Shows current setup."
-        }
-    )
-    async def welcomeconfig(self, ctx):
-        """View welcome config."""
+    @welcome.command(name="reset", description="♻️ Reset all Dem welcome settings for this server.")
+    async def reset_welcome(self, ctx):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM welcome_settings WHERE guild_id=?", (ctx.guild.id,))
+            await db.commit()
+        await ctx.send("♻️ **Dem Welcome Settings** have been reset to factory defaults.")
 
-        data = self.get_data(ctx.guild.id)
+    @welcome.command(name="setup", description="🚀 Set Join/Leave channels.")
+    async def setup(self, ctx, welcome: discord.TextChannel = None, leave: discord.TextChannel = None):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                INSERT INTO welcome_settings (guild_id, welcome_channel, leave_channel) 
+                VALUES (?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET 
+                welcome_channel=COALESCE(?, welcome_channel), 
+                leave_channel=COALESCE(?, leave_channel)
+            """, (ctx.guild.id, getattr(welcome, 'id', None), getattr(leave, 'id', None), 
+                  getattr(welcome, 'id', None), getattr(leave, 'id', None)))
+            await db.commit()
+        await ctx.send("✅ Dem Channels updated.")
 
-        if not data:
-
-            return await ctx.send(
-                "❌ Not configured."
-            )
-
-        embed = discord.Embed(
-            title="⚙️ Welcome Configuration",
-            color=discord.Color.blurple()
-        )
-
-        embed.add_field(
-            name="📥 Welcome Channel",
-            value=f"<#{data[1]}>" if data[1] else "None",
-            inline=False
-        )
-
-        embed.add_field(
-            name="📤 Leave Channel",
-            value=f"<#{data[2]}>" if data[2] else "None",
-            inline=False
-        )
-
-        embed.add_field(
-            name="👋 Welcome Message",
-            value=data[3] or "None",
-            inline=False
-        )
-
-        embed.add_field(
-            name="💔 Leave Message",
-            value=data[4] or "None",
-            inline=False
-        )
-
-        await ctx.send(embed=embed)
-
-
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
-
     await bot.add_cog(Welcome(bot))
