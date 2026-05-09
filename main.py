@@ -1,48 +1,55 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import asyncio
 import os
-import time
-import traceback
 import sys
+import aiosqlite
 
-# Add current directory to path so Railway finds your files easily
+# Add current directory to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 import config
 import database 
+# Import the views from your cogs to register them
+from cogs.tickets import TicketView, TicketControlView
+from cogs.antinuke import ModPanel
 
 # =========================
 # BOT SETUP
 # =========================
-intents = discord.Intents.all() # Using .all() to ensure no 'Missing Intents' errors on Railway
+intents = discord.Intents.all() 
 
 class EliteBot(commands.Bot):
     def __init__(self):
         super().__init__(
-            command_prefix=self.get_dynamic_prefix,
+            command_prefix=self.get_prefix_async,
             intents=intents,
             help_command=None,
             case_insensitive=True
         )
 
-    async def get_dynamic_prefix(self, bot, message):
+    async def get_prefix_async(self, bot, message):
+        """Async prefix fetcher to prevent bot lag."""
         if not message.guild:
             return "!"
         try:
-            # Reusing your prefix logic but making it safer
-            import sqlite3
-            conn = sqlite3.connect("prefixes.db")
-            cur = conn.cursor()
-            cur.execute("SELECT prefix FROM prefixes WHERE guild_id=?", (message.guild.id,))
-            res = cur.fetchone()
-            conn.close()
-            return res[0] if res else "!"
+            async with aiosqlite.connect("bot.db") as db:
+                async with db.execute("SELECT prefix FROM prefixes WHERE guild_id=?", (message.guild.id,)) as cursor:
+                    res = await cursor.fetchone()
+                    return res[0] if res else "!"
         except:
             return "!"
 
     async def setup_hook(self):
-        # This is the NEW way to load cogs in discord.py 2.0+
+        # 1. Register Persistent Views (The "Famous Bot" Secret)
+        # This makes buttons work after a restart!
+        self.add_view(TicketView())
+        self.add_view(TicketControlView())
+        # Note: ModPanel usually doesn't need global registration as it's short-term, 
+        # but TicketView absolutely does.
+
+        # 2. Loading Cogs
         print("🚀 Loading Cogs...")
         for filename in os.listdir("./cogs"):
             if filename.endswith(".py"):
@@ -52,9 +59,9 @@ class EliteBot(commands.Bot):
                 except Exception as e:
                     print(f"❌ {filename} failed: {e}")
         
-        # Syncing Slash Commands
+        # 3. Syncing Slash Commands
         await self.tree.sync()
-        print("🔗 Slash Commands Synced.")
+        print("🔗 Slash Commands Synced Globaly.")
 
 bot = EliteBot()
 
@@ -65,10 +72,14 @@ bot = EliteBot()
 async def on_ready():
     await database.initialize_db()
     
-    # Famous Bot Look: Custom Console Banner
+    # Custom Activity Status
+    activity = discord.Activity(type=discord.ActivityType.watching, name=f"over {len(bot.guilds)} servers | !")
+    await bot.change_presence(status=discord.Status.online, activity=activity)
+
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     print(f"🛡️  {bot.user.name} is now PROTECTING {len(bot.guilds)} servers")
     print(f"📡  Latency: {round(bot.latency * 1000)}ms")
+    print(f"🛠️  Persistent Views: Registered")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 # =========================
@@ -79,10 +90,10 @@ async def start_bot():
         try:
             await bot.start(config.TOKEN)
         except discord.LoginFailure:
-            print("❌ ERROR: Invalid Token in config.py or Railway Variables!")
+            print("❌ ERROR: Invalid Token!")
 
 if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
     except KeyboardInterrupt:
-        pass
+        print("📴 Bot is shutting down...")
