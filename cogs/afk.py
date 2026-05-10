@@ -1,174 +1,139 @@
-# afk.py
-
 import discord
 from discord.ext import commands
-import sqlite3
+import aiosqlite
 import time
 
-# =========================
-# DATABASE
-# =========================
-db = sqlite3.connect("afk.db", check_same_thread=False)
-cursor = db.cursor()
+DB_PATH = "bot.db"
+DEM_COLOR = 0x2b2d31
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS afk(
-    guild_id INTEGER,
-    user_id INTEGER,
-    reason TEXT,
-    since INTEGER
-)
-""")
-
-db.commit()
-
-# =========================
-# COG
-# =========================
 class AFK(commands.Cog):
-
+    """
+    🌙 Professional AFK System
+    Features: Auto-Nickname, Time Formatting, and Multi-server support.
+    """
     def __init__(self, bot):
-
         self.bot = bot
 
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS afk (
+                    guild_id INTEGER,
+                    user_id INTEGER,
+                    reason TEXT,
+                    since INTEGER,
+                    PRIMARY KEY (guild_id, user_id)
+                )
+            """)
+            await db.commit()
+
     # =========================
-    # SET AFK
+    # TIME FORMATTER
+    # =========================
+    def get_time_string(self, seconds):
+        if seconds < 60:
+            return f"{seconds}s"
+        minutes, seconds = divmod(seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        days, hours = divmod(hours, 24)
+        
+        parts = []
+        if days > 0: parts.append(f"{days}d")
+        if hours > 0: parts.append(f"{hours}h")
+        if minutes > 0: parts.append(f"{minutes}m")
+        if seconds > 0: parts.append(f"{seconds}s")
+        return " ".join(parts)
+
+    # =========================
+    # AFK COMMAND
     # =========================
     @commands.hybrid_command(
         name="afk",
-        help="Set your AFK status.",
-        extras={
-            "example": "!afk Sleeping",
-            "tips": "Mentioned users will see your AFK reason."
-        }
+        description="Set an away status so others know you are busy."
     )
-    async def afk(
-        self,
-        ctx,
-        *,
-        reason="AFK"
-    ):
-        """Set AFK."""
-
-        cursor.execute(
-            """
-            DELETE FROM afk
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        cursor.execute(
-            """
-            INSERT INTO afk VALUES (?, ?, ?, ?)
-            """,
-            (
-                ctx.guild.id,
-                ctx.author.id,
-                reason,
-                int(time.time())
+    async def afk(self, ctx, *, reason: str = "Away from keyboard"):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO afk (guild_id, user_id, reason, since) VALUES (?, ?, ?, ?)",
+                (ctx.guild.id, ctx.author.id, reason, int(time.time()))
             )
-        )
+            await db.commit()
 
-        db.commit()
+        # Update Nickname
+        if not ctx.author.display_name.startswith("[AFK]"):
+            try:
+                await ctx.author.edit(nick=f"[AFK] {ctx.author.display_name}")
+            except:
+                pass # Bot lacks permission or user is owner
 
         embed = discord.Embed(
-            title="🌙 AFK Enabled",
-            description=f"Reason: **{reason}**",
-            color=discord.Color.blurple()
+            description=f"🌙 {ctx.author.mention}, I've set your AFK: **{reason}**",
+            color=DEM_COLOR
         )
-
         await ctx.send(embed=embed)
 
     # =========================
-    # MESSAGE LISTENER
+    # LISTENERS
     # =========================
     @commands.Cog.listener()
     async def on_message(self, message):
-
         if message.author.bot or not message.guild:
             return
 
-        # =========================
-        # REMOVE AFK
-        # =========================
-        cursor.execute(
-            """
-            SELECT reason, since FROM afk
-            WHERE guild_id=? AND user_id=?
-            """,
-            (message.guild.id, message.author.id)
-        )
-
-        data = cursor.fetchone()
-
-        if data:
-
-            cursor.execute(
-                """
-                DELETE FROM afk
-                WHERE guild_id=? AND user_id=?
-                """,
+        # 1. REMOVE AFK (When the user speaks)
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT reason, since FROM afk WHERE guild_id=? AND user_id=?",
                 (message.guild.id, message.author.id)
-            )
+            ) as cursor:
+                data = await cursor.fetchone()
 
-            db.commit()
+                if data:
+                    reason, since = data
+                    duration = self.get_time_string(int(time.time()) - since)
 
-            duration = int(time.time()) - data[1]
+                    await db.execute(
+                        "DELETE FROM afk WHERE guild_id=? AND user_id=?",
+                        (message.guild.id, message.author.id)
+                    )
+                    await db.commit()
 
-            embed = discord.Embed(
-                title="👋 Welcome Back",
-                description=(
-                    f"You were AFK for "
-                    f"`{duration}` seconds."
-                ),
-                color=discord.Color.green()
-            )
+                    # Reset Nickname
+                    try:
+                        new_nick = message.author.display_name.replace("[AFK] ", "")
+                        await message.author.edit(nick=new_nick)
+                    except:
+                        pass
 
-            await message.channel.send(
-                embed=embed
-            )
+                    embed = discord.Embed(
+                        title="👋 Welcome Back!",
+                        description=f"I've removed your AFK status.\nLogged: `{duration}`",
+                        color=discord.Color.green()
+                    )
+                    await message.channel.send(embed=embed, delete_after=10)
 
-        # =========================
-        # AFK MENTION
-        # =========================
-        for user in message.mentions:
+        # 2. NOTIFY MENTIONS (When someone pings an AFK user)
+        if message.mentions:
+            for user in message.mentions:
+                async with aiosqlite.connect(DB_PATH) as db:
+                    async with db.execute(
+                        "SELECT reason, since FROM afk WHERE guild_id=? AND user_id=?",
+                        (message.guild.id, user.id)
+                    ) as cursor:
+                        afk_data = await cursor.fetchone()
 
-            cursor.execute(
-                """
-                SELECT reason, since FROM afk
-                WHERE guild_id=? AND user_id=?
-                """,
-                (message.guild.id, user.id)
-            )
+                        if afk_data:
+                            reason, since = afk_data
+                            duration = self.get_time_string(int(time.time()) - since)
 
-            afk = cursor.fetchone()
+                            embed = discord.Embed(
+                                description=f"💤 **{user.name}** is currently away.",
+                                color=discord.Color.orange()
+                            )
+                            embed.add_field(name="Reason", value=f"`{reason}`")
+                            embed.add_field(name="Since", value=f"<t:{since}:R>")
+                            
+                            await message.channel.send(embed=embed, delete_after=15)
 
-            if afk:
-
-                reason = afk[0]
-                duration = int(time.time()) - afk[1]
-
-                embed = discord.Embed(
-                    title="🌙 User AFK",
-                    description=(
-                        f"{user.mention} is AFK\n\n"
-                        f"📝 Reason: **{reason}**\n"
-                        f"⏰ Since: `{duration}` seconds ago"
-                    ),
-                    color=discord.Color.orange()
-                )
-
-                await message.channel.send(
-                    embed=embed
-                )
-
-        await self.bot.process_commands(message)
-
-
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
-
     await bot.add_cog(AFK(bot))
