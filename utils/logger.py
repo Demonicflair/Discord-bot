@@ -1,358 +1,132 @@
-import sqlite3
+import aiosqlite
 import discord
+import datetime
 
-# =========================
-# DATABASE
-# =========================
-db = sqlite3.connect(
-    "logs.db",
-    check_same_thread=False
-)
+DB_PATH = "logs.db"
 
-cursor = db.cursor()
+# Cache to prevent database spamming for every message/event
+_settings_cache = {}
 
-# =========================
-# TABLES
-# =========================
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS log_channels(
-    guild_id INTEGER PRIMARY KEY,
-    mod_log INTEGER,
-    bot_log INTEGER
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS log_settings(
-    guild_id INTEGER,
-    log_type TEXT,
-    enabled INTEGER
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS logs_data(
-    case_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id INTEGER,
-    user_id INTEGER,
-    moderator_id INTEGER,
-    type TEXT,
-    content TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-)
-""")
-
-db.commit()
-
-# =========================
-# FETCH LOG CHANNELS
-# =========================
-def get_logs(guild_id):
-
-    cursor.execute(
-        "SELECT mod_log, bot_log FROM log_channels WHERE guild_id=?",
-        (guild_id,)
-    )
-
-    return cursor.fetchone()
-
-# =========================
-# SET LOG CHANNELS
-# =========================
-def set_log_channel(guild_id, mod_log=None, bot_log=None):
-
-    cursor.execute(
-        "DELETE FROM log_channels WHERE guild_id=?",
-        (guild_id,)
-    )
-
-    cursor.execute(
-        """
-        INSERT INTO log_channels(
-            guild_id,
-            mod_log,
-            bot_log
+async def init_db():
+    """Initialize the database with optimized settings."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Enable WAL mode for faster concurrent reading/writing
+        await db.execute("PRAGMA journal_mode=WAL")
+        
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS log_channels(
+            guild_id INTEGER PRIMARY KEY,
+            mod_log INTEGER,
+            bot_log INTEGER
         )
-        VALUES (?, ?, ?)
-        """,
-        (
-            guild_id,
-            mod_log,
-            bot_log
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS log_settings(
+            guild_id INTEGER,
+            log_type TEXT,
+            enabled INTEGER,
+            PRIMARY KEY (guild_id, log_type)
         )
-    )
+        """)
 
-    db.commit()
-
-# =========================
-# SAVE LOG
-# =========================
-def save_log(
-    guild_id,
-    user_id,
-    log_type,
-    content,
-    moderator_id=0
-):
-
-    cursor.execute(
-        """
-        INSERT INTO logs_data(
-            guild_id,
-            user_id,
-            moderator_id,
-            type,
-            content
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS logs_data(
+            case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER,
+            user_id INTEGER,
+            moderator_id INTEGER,
+            type TEXT,
+            content TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (
-            guild_id,
-            user_id,
-            moderator_id,
-            log_type,
-            content
+        """)
+        await db.commit()
+
+# =========================
+# ASYNC FETCHING & SETTING
+# =========================
+
+async def get_logs(guild_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT mod_log, bot_log FROM log_channels WHERE guild_id=?", (guild_id,)) as cur:
+            return await cur.fetchone()
+
+async def set_log_channel(guild_id, mod_log=None, bot_log=None):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO log_channels (guild_id, mod_log, bot_log) VALUES (?, ?, ?)",
+            (guild_id, mod_log, bot_log)
         )
-    )
+        await db.commit()
 
-    db.commit()
-
-    return cursor.lastrowid
-
-# =========================
-# GET CASE
-# =========================
-def get_case(case_id):
-
-    cursor.execute(
-        """
-        SELECT *
-        FROM logs_data
-        WHERE case_id=?
-        """,
-        (case_id,)
-    )
-
-    return cursor.fetchone()
-
-# =========================
-# USER HISTORY
-# =========================
-def get_user_history(guild_id, user_id, limit=10):
-
-    cursor.execute(
-        """
-        SELECT *
-        FROM logs_data
-        WHERE guild_id=?
-        AND user_id=?
-        ORDER BY timestamp DESC
-        LIMIT ?
-        """,
-        (
-            guild_id,
-            user_id,
-            limit
+async def save_log(guild_id, user_id, log_type, content, moderator_id=0):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "INSERT INTO logs_data (guild_id, user_id, moderator_id, type, content) VALUES (?, ?, ?, ?, ?)",
+            (guild_id, user_id, moderator_id, log_type, content)
         )
-    )
-
-    return cursor.fetchall()
+        await db.commit()
+        return cursor.lastrowid
 
 # =========================
-# SEARCH LOGS
+# SMART SETTINGS (WITH CACHE)
 # =========================
-def search_logs_db(
-    guild_id,
-    query,
-    log_type=None
-):
 
-    if log_type:
+async def is_log_enabled(guild_id, log_type):
+    """Checks cache first, then DB, for maximum performance."""
+    cache_key = (guild_id, log_type)
+    if cache_key in _settings_cache:
+        return _settings_cache[cache_key]
 
-        cursor.execute(
-            """
-            SELECT *
-            FROM logs_data
-            WHERE guild_id=?
-            AND type=?
-            AND content LIKE ?
-            ORDER BY timestamp DESC
-            LIMIT 15
-            """,
-            (
-                guild_id,
-                log_type,
-                f"%{query}%"
-            )
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT enabled FROM log_settings WHERE guild_id=? AND log_type=?", (guild_id, log_type)) as cur:
+            r = await cur.fetchone()
+            state = r is None or r[0] == 1
+            _settings_cache[cache_key] = state
+            return state
+
+async def set_log_state(guild_id, log_type, state):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO log_settings (guild_id, log_type, enabled) VALUES (?, ?, ?)",
+            (guild_id, log_type, int(state))
         )
-
-    else:
-
-        cursor.execute(
-            """
-            SELECT *
-            FROM logs_data
-            WHERE guild_id=?
-            AND content LIKE ?
-            ORDER BY timestamp DESC
-            LIMIT 15
-            """,
-            (
-                guild_id,
-                f"%{query}%"
-            )
-        )
-
-    return cursor.fetchall()
+        await db.commit()
+        # Update cache instantly
+        _settings_cache[(guild_id, log_type)] = state
 
 # =========================
-# RECENT LOGS
+# SEARCH & HISTORY
 # =========================
-def get_recent_logs(
-    guild_id,
-    limit=10
-):
 
-    cursor.execute(
-        """
-        SELECT *
-        FROM logs_data
-        WHERE guild_id=?
-        ORDER BY timestamp DESC
-        LIMIT ?
-        """,
-        (
-            guild_id,
-            limit
-        )
-    )
-
-    return cursor.fetchall()
+async def get_user_history(guild_id, user_id, limit=10):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT * FROM logs_data WHERE guild_id=? AND user_id=? ORDER BY timestamp DESC LIMIT ?",
+            (guild_id, user_id, limit)
+        ) as cur:
+            return await cur.fetchall()
 
 # =========================
-# DELETE CASE
+# UI BUILDER
 # =========================
-def delete_case(case_id):
 
-    cursor.execute(
-        """
-        DELETE FROM logs_data
-        WHERE case_id=?
-        """,
-        (case_id,)
-    )
-
-    db.commit()
-
-# =========================
-# LOG FILTERS
-# =========================
-def is_log_enabled(
-    guild_id,
-    log_type
-):
-
-    cursor.execute(
-        """
-        SELECT enabled
-        FROM log_settings
-        WHERE guild_id=?
-        AND log_type=?
-        """,
-        (
-            guild_id,
-            log_type
-        )
-    )
-
-    r = cursor.fetchone()
-
-    return r is None or r[0] == 1
-
-# =========================
-# ENABLE / DISABLE LOGS
-# =========================
-def set_log(
-    guild_id,
-    log_type,
-    state
-):
-
-    cursor.execute(
-        """
-        DELETE FROM log_settings
-        WHERE guild_id=?
-        AND log_type=?
-        """,
-        (
-            guild_id,
-            log_type
-        )
-    )
-
-    cursor.execute(
-        """
-        INSERT INTO log_settings
-        VALUES (?, ?, ?)
-        """,
-        (
-            guild_id,
-            log_type,
-            int(state)
-        )
-    )
-
-    db.commit()
-
-# =========================
-# BUILD LOG EMBED
-# =========================
 def build_case_embed(case):
-
-    if not case:
-        return None
-
-    (
-        case_id,
-        guild_id,
-        user_id,
-        moderator_id,
-        log_type,
-        content,
-        timestamp
-    ) = case
-
+    if not case: return None
+    
+    c_id, g_id, u_id, m_id, l_type, content, stamp = case
+    
     embed = discord.Embed(
-        title=f"📁 Case #{case_id}",
-        color=discord.Color.blurple()
+        title=f"📁 Case #{c_id}",
+        description=f"**Action:** {l_type.replace('_', ' ').title()}",
+        color=0x2b2d31,
+        timestamp=discord.utils.utcnow()
     )
-
-    embed.add_field(
-        name="📌 Type",
-        value=log_type,
-        inline=True
-    )
-
-    embed.add_field(
-        name="👤 User ID",
-        value=user_id,
-        inline=True
-    )
-
-    embed.add_field(
-        name="🛠️ Moderator ID",
-        value=moderator_id,
-        inline=True
-    )
-
-    embed.add_field(
-        name="📝 Details",
-        value=content,
-        inline=False
-    )
-
-    embed.set_footer(
-        text=f"Timestamp: {timestamp}"
-    )
-
+    embed.add_field(name="👤 Target User", value=f"<@{u_id}>\n`ID: {u_id}`", inline=True)
+    if m_id != 0:
+        embed.add_field(name="🛠️ Moderator", value=f"<@{m_id}>\n`ID: {m_id}`", inline=True)
+    
+    embed.add_field(name="📝 Details", value=content or "No details provided.", inline=False)
+    embed.set_footer(text=f"Dem Security System • {stamp}")
     return embed
