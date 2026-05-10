@@ -1,361 +1,143 @@
-# booster.py
-
 import discord
 from discord.ext import commands
 from discord import app_commands
-import sqlite3
+import aiosqlite
 
 from utils.logger import get_logs, save_log, is_log_enabled
 
-# =========================
-# DATABASE
-# =========================
-db = sqlite3.connect("booster.db", check_same_thread=False)
-cursor = db.cursor()
+DB_PATH = "bot.db"
+BOOSTER_COLOR = 0xf47fff # Discord Booster Pink
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS booster_roles(
-    guild_id INTEGER,
-    user_id INTEGER,
-    role_id INTEGER
-)
-""")
-
-db.commit()
-
-# =========================
-# LOG SYSTEM
-# =========================
-async def send_log(guild, text):
-
-    logs = get_logs(guild.id)
-
-    if logs and is_log_enabled(guild.id, "booster"):
-
-        channel = guild.get_channel(logs[1])
-
-        if channel:
-            embed = discord.Embed(
-                description=text,
-                color=discord.Color.purple()
-            )
-
-            await channel.send(embed=embed)
-
-    save_log(guild.id, 0, "booster", text)
-
-
-# =========================
-# COG
-# =========================
 class Booster(commands.Cog):
-
+    """
+    ✨ Custom Booster Rewards
+    Allows boosters to create, customize, and manage their own unique roles.
+    """
     def __init__(self, bot):
-
         self.bot = bot
 
-    # =========================
-    # BOOST ROLE CREATE
-    # =========================
-    @commands.hybrid_command(
-        name="boosterrole",
-        help="Create a custom booster role.",
-        extras={
-            "example": "!boosterrole Red",
-            "tips": "Only server boosters can use this."
-        }
-    )
-    async def boosterrole(
-        self,
-        ctx,
-        *,
-        name=None
-    ):
-        """Create booster role."""
-
-        if not ctx.author.premium_since:
-
-            return await ctx.send(
-                "❌ You must boost the server."
-            )
-
-        if not name:
-
-            return await ctx.send(
-                "❌ Usage: !boosterrole <name>"
-            )
-
-        cursor.execute(
-            """
-            SELECT role_id FROM booster_roles
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        existing = cursor.fetchone()
-
-        if existing:
-
-            role = ctx.guild.get_role(existing[0])
-
-            if role:
-
-                return await ctx.send(
-                    f"❌ You already have {role.mention}"
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS booster_roles (
+                    guild_id INTEGER,
+                    user_id INTEGER,
+                    role_id INTEGER,
+                    PRIMARY KEY (guild_id, user_id)
                 )
-
-        role = await ctx.guild.create_role(
-            name=name,
-            color=discord.Color.random(),
-            reason="Custom Booster Role"
-        )
-
-        await ctx.author.add_roles(role)
-
-        cursor.execute(
-            "INSERT INTO booster_roles VALUES (?, ?, ?)",
-            (ctx.guild.id, ctx.author.id, role.id)
-        )
-
-        db.commit()
-
-        embed = discord.Embed(
-            title="✨ Booster Role Created",
-            description=f"{role.mention}",
-            color=role.color
-        )
-
-        await ctx.send(embed=embed)
-
-        await send_log(
-            ctx.guild,
-            f"✨ {ctx.author} created booster role {role.name}"
-        )
+            """)
+            await db.commit()
 
     # =========================
-    # RENAME ROLE
+    # LOG HELPER
     # =========================
-    @commands.hybrid_command(
-        name="boostername",
-        help="Rename your booster role.",
-        extras={
-            "example": "!boostername Galaxy",
-            "tips": "Changes your custom role name."
-        }
-    )
-    async def boostername(
-        self,
-        ctx,
-        *,
-        name=None
-    ):
-        """Rename booster role."""
-
-        if not name:
-
-            return await ctx.send(
-                "❌ Usage: !boostername <name>"
-            )
-
-        cursor.execute(
-            """
-            SELECT role_id FROM booster_roles
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        data = cursor.fetchone()
-
-        if not data:
-
-            return await ctx.send(
-                "❌ You do not own a booster role."
-            )
-
-        role = ctx.guild.get_role(data[0])
-
-        if not role:
-
-            return await ctx.send(
-                "❌ Role not found."
-            )
-
-        await role.edit(name=name)
-
-        await ctx.send(
-            f"✅ Renamed role to **{name}**"
-        )
+    async def send_booster_log(self, guild, text):
+        logs = get_logs(guild.id)
+        if logs and is_log_enabled(guild.id, "booster"):
+            channel = guild.get_channel(logs[1])
+            if channel:
+                embed = discord.Embed(description=text, color=BOOSTER_COLOR, timestamp=discord.utils.utcnow())
+                embed.set_author(name="Booster Logs", icon_url=guild.icon.url if guild.icon else None)
+                await channel.send(embed=embed)
+        save_log(guild.id, 0, "booster", text)
 
     # =========================
-    # ROLE COLOR
+    # CREATE ROLE
     # =========================
-    @commands.hybrid_command(
-        name="boostercolor",
-        help="Change booster role color.",
-        extras={
-            "example": "!boostercolor #ff0000",
-            "tips": "Use hex colors."
-        }
-    )
-    async def boostercolor(
-        self,
-        ctx,
-        color=None
-    ):
-        """Change booster role color."""
+    @commands.hybrid_command(name="br-create", description="Create your exclusive booster role.")
+    async def br_create(self, ctx, *, name: str):
+        if not ctx.author.premium_since:
+            return await ctx.send("✨ This feature is reserved for **Server Boosters**!", ephemeral=True)
 
-        if not color:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT role_id FROM booster_roles WHERE guild_id=? AND user_id=?", 
+                                (ctx.guild.id, ctx.author.id)) as cur:
+                if await cur.fetchone():
+                    return await ctx.send("❌ You already have a custom role! Use `/br-edit` to change it.", ephemeral=True)
 
-            return await ctx.send(
-                "❌ Usage: !boostercolor <hex>"
-            )
-
-        cursor.execute(
-            """
-            SELECT role_id FROM booster_roles
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        data = cursor.fetchone()
-
-        if not data:
-
-            return await ctx.send(
-                "❌ No booster role found."
-            )
-
-        role = ctx.guild.get_role(data[0])
-
-        if not role:
-
-            return await ctx.send(
-                "❌ Role not found."
-            )
-
+        # Create role and move it to a safe position (below the bot's top role)
         try:
+            role = await ctx.guild.create_role(name=name, color=discord.Color.random(), reason=f"Booster Role: {ctx.author}")
+            
+            # Smart Positioning: Try to place it below the bot's highest role to keep hierarchy clean
+            await role.edit(position=ctx.guild.me.top_role.position - 1)
+            await ctx.author.add_roles(role)
+            
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute("INSERT INTO booster_roles VALUES (?, ?, ?)", (ctx.guild.id, ctx.author.id, role.id))
+                await db.commit()
 
-            new_color = discord.Color.from_str(color)
-
-        except:
-
-            return await ctx.send(
-                "❌ Invalid hex color."
-            )
-
-        await role.edit(color=new_color)
-
-        embed = discord.Embed(
-            title="🎨 Booster Role Updated",
-            description=f"New color: `{color}`",
-            color=new_color
-        )
-
-        await ctx.send(embed=embed)
+            embed = discord.Embed(title="✨ Role Created", description=f"Successfully created {role.mention}!", color=role.color)
+            await ctx.send(embed=embed)
+            await self.send_booster_log(ctx.guild, f"✨ {ctx.author.mention} created custom role: **{name}**")
+        
+        except discord.Forbidden:
+            await ctx.send("❌ I don't have permission to create or move roles.")
 
     # =========================
-    # DELETE BOOSTER ROLE
+    # EDIT ROLE (Color/Name)
     # =========================
-    @commands.hybrid_command(
-        name="deletebooster",
-        help="Delete your booster role.",
-        extras={
-            "example": "!deletebooster",
-            "tips": "Removes your custom role."
-        }
-    )
-    async def deletebooster(self, ctx):
-        """Delete booster role."""
-
-        cursor.execute(
-            """
-            SELECT role_id FROM booster_roles
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        data = cursor.fetchone()
-
+    @commands.hybrid_command(name="br-edit", description="Update your booster role's appearance.")
+    @app_commands.describe(name="New role name", color="Hex code (e.g. #ff0000)", icon_url="Image URL (Level 2+ Servers)")
+    async def br_edit(self, ctx, name: str = None, color: str = None, icon_url: str = None):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT role_id FROM booster_roles WHERE guild_id=? AND user_id=?", 
+                                (ctx.guild.id, ctx.author.id)) as cur:
+                data = await cur.fetchone()
+        
         if not data:
-
-            return await ctx.send(
-                "❌ No booster role found."
-            )
+            return await ctx.send("❌ You don't have a booster role yet. Create one with `/br-create`.", ephemeral=True)
 
         role = ctx.guild.get_role(data[0])
+        if not role: return await ctx.send("❌ Your role was deleted manually.")
 
-        if role:
+        updates = {}
+        if name: updates['name'] = name
+        if color:
+            try: updates['color'] = discord.Color.from_str(color)
+            except: return await ctx.send("❌ Invalid Hex code.")
+        
+        # Elite Feature: Role Icons (Requires Server Level 2)
+        if icon_url and ctx.guild.premium_tier >= 2:
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(icon_url) as resp:
+                        if resp.status == 200:
+                            updates['display_icon'] = await resp.read()
+            except: pass
 
-            await role.delete()
-
-        cursor.execute(
-            """
-            DELETE FROM booster_roles
-            WHERE guild_id=? AND user_id=?
-            """,
-            (ctx.guild.id, ctx.author.id)
-        )
-
-        db.commit()
-
-        await ctx.send(
-            "🗑️ Booster role deleted."
-        )
+        await role.edit(**updates)
+        await ctx.send(f"✅ Successfully updated your role {role.mention}!", ephemeral=True)
 
     # =========================
-    # AUTO REMOVE ON UNBOOST
+    # CLEANUP LISTENERS
     # =========================
+    async def cleanup_role(self, guild, user_id):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT role_id FROM booster_roles WHERE guild_id=? AND user_id=?", (guild.id, user_id)) as cur:
+                data = await cur.fetchone()
+            
+            if data:
+                role = guild.get_role(data[0])
+                if role:
+                    try: await role.delete(reason="User stopped boosting or left server.")
+                    except: pass
+                
+                await db.execute("DELETE FROM booster_roles WHERE guild_id=? AND user_id=?", (guild.id, user_id))
+                await db.commit()
+                await self.send_booster_log(guild, f"🗑️ Deleted custom role for user ID: `{user_id}`")
+
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
-
+        # If they used to boost and now they don't
         if before.premium_since and not after.premium_since:
+            await self.cleanup_role(after.guild, after.id)
 
-            cursor.execute(
-                """
-                SELECT role_id FROM booster_roles
-                WHERE guild_id=? AND user_id=?
-                """,
-                (after.guild.id, after.id)
-            )
+    @commands.Cog.listener()
+    async def on_member_remove(self, member):
+        # If a booster leaves the server, delete their role to save role slots
+        await self.cleanup_role(member.guild, member.id)
 
-            data = cursor.fetchone()
-
-            if not data:
-                return
-
-            role = after.guild.get_role(data[0])
-
-            if role:
-
-                try:
-                    await role.delete()
-
-                except:
-                    pass
-
-            cursor.execute(
-                """
-                DELETE FROM booster_roles
-                WHERE guild_id=? AND user_id=?
-                """,
-                (after.guild.id, after.id)
-            )
-
-            db.commit()
-
-            await send_log(
-                after.guild,
-                f"❌ Removed booster role from {after}"
-            )
-
-
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
-
     await bot.add_cog(Booster(bot))
