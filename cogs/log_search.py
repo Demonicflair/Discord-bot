@@ -1,11 +1,26 @@
+import discord
 from discord.ext import commands
 from discord import app_commands
-from utils.logger import set_log
+from utils.logger import set_log_state # Matching our upgraded logger name
 
+# Pre-defined suggestions for Autocomplete
+LOG_SUGGESTIONS = [
+    "ban", "unban", "kick", "warn", "mute", "unmute",
+    "ticket", "security", "antinuke", "raid", "spam", "lockdown"
+]
 
 class LogControl(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    # =========================
+    # ✅ AUTOCOMPLETE LOGIC
+    # =========================
+    async def log_autocomplete(self, interaction: discord.Interaction, current: str):
+        return [
+            app_commands.Choice(name=l.title(), value=l)
+            for l in LOG_SUGGESTIONS if current.lower() in l.lower()
+        ][:25]
 
     # =========================
     # ✅ ENABLE LOGS
@@ -15,57 +30,27 @@ class LogControl(commands.Cog):
         help="Enable a specific log type.",
         extras={
             "example": "!log_enable ban",
-            "tips": (
-                "Enable moderation, ticket, antinuke, "
-                "security, or other logs."
-            )
+            "tips": "Enable moderation, ticket, antinuke, or security logs."
         }
     )
-    @app_commands.describe(
-        log="The log type you want to enable"
-    )
+    @app_commands.describe(log="The log type you want to enable")
+    @app_commands.autocomplete(log=log_autocomplete)
     @commands.has_permissions(manage_guild=True)
-    async def log_enable(
-        self,
-        ctx,
-        log: str = None
-    ):
+    async def log_enable(self, ctx, log: str = None):
         """Enable a specific log type."""
-
         if log is None:
-            return await ctx.send(
-                "❌ Usage: !log_enable <log_type>"
-            )
+            return await ctx.send("❌ Usage: `!log_enable <log_type>`", delete_after=10)
 
         log = log.lower()
+        await set_log_state(ctx.guild.id, log, True)
 
-        set_log(
-            ctx.guild.id,
-            log,
-            True
+        embed = discord.Embed(
+            title="✅ Logs Enabled",
+            description=f"Successfully activated **{log}** logs for this server.",
+            color=discord.Color.green()
         )
-
-        embed = (
-            discord.Embed(
-                title="✅ Logs Enabled",
-                description=(
-                    f"Successfully enabled "
-                    f"`{log}` logs."
-                ),
-                color=discord.Color.green()
-            )
-        )
-
-        embed.add_field(
-            name="📘 Example",
-            value="`!log_enable ban`",
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"Enabled by {ctx.author}",
-            icon_url=ctx.author.display_avatar.url
-        )
+        embed.add_field(name="📘 Example", value=f"`!log_enable {log}`", inline=False)
+        embed.set_footer(text=f"Action by {ctx.author}", icon_url=ctx.author.display_avatar.url)
 
         await ctx.send(embed=embed)
 
@@ -77,60 +62,30 @@ class LogControl(commands.Cog):
         help="Disable a specific log type.",
         extras={
             "example": "!log_disable ticket",
-            "tips": (
-                "Disable logs that are too spammy "
-                "or unnecessary."
-            )
+            "tips": "Disable logs that are too spammy or unnecessary."
         }
     )
-    @app_commands.describe(
-        log="The log type you want to disable"
-    )
+    @app_commands.describe(log="The log type you want to disable")
+    @app_commands.autocomplete(log=log_autocomplete)
     @commands.has_permissions(manage_guild=True)
-    async def log_disable(
-        self,
-        ctx,
-        log: str = None
-    ):
+    async def log_disable(self, ctx, log: str = None):
         """Disable a specific log type."""
-
         if log is None:
-            return await ctx.send(
-                "❌ Usage: !log_disable <log_type>"
-            )
+            return await ctx.send("❌ Usage: `!log_disable <log_type>`", delete_after=10)
 
         log = log.lower()
+        await set_log_state(ctx.guild.id, log, False)
 
-        set_log(
-            ctx.guild.id,
-            log,
-            False
+        embed = discord.Embed(
+            title="❌ Logs Disabled",
+            description=f"Successfully deactivated **{log}** logs.",
+            color=discord.Color.red()
         )
-
-        embed = (
-            discord.Embed(
-                title="❌ Logs Disabled",
-                description=(
-                    f"Successfully disabled "
-                    f"`{log}` logs."
-                ),
-                color=discord.Color.red()
-            )
-        )
-
-        embed.add_field(
-            name="📘 Example",
-            value="`!log_disable ticket`",
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"Disabled by {ctx.author}",
-            icon_url=ctx.author.display_avatar.url
-        )
+        embed.add_field(name="📘 Example", value=f"`!log_disable {log}`", inline=False)
+        embed.set_footer(text=f"Action by {ctx.author}", icon_url=ctx.author.display_avatar.url)
 
         await ctx.send(embed=embed)
 
-
 async def setup(bot):
     await bot.add_cog(LogControl(bot))
+    
