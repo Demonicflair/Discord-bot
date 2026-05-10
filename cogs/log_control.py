@@ -1,290 +1,109 @@
 import discord
-
 from discord.ext import commands
 from discord import app_commands
 
 from utils.logger import (
-    set_log,
+    set_log_state,  # Renamed to match the upgraded logger
     set_log_channel,
     get_logs
 )
 
 # =========================
-# VALID LOG TYPES
+# CONFIG
 # =========================
 VALID_LOGS = [
-
-    "ban",
-    "unban",
-
-    "kick",
-
-    "warn",
-
-    "mute",
-    "unmute",
-
-    "ticket",
-
-    "security",
-
-    "antinuke",
-
-    "raid",
-
-    "spam",
-
-    "lockdown"
+    "ban", "unban", "kick", "warn", "mute", "unmute",
+    "ticket", "security", "antinuke", "raid", "spam", "lockdown"
 ]
 
-# =========================
-# CHOICES
-# =========================
 LOG_CHOICES = [
-
-    app_commands.Choice(
-        name=log.title(),
-        value=log
-    )
-
+    app_commands.Choice(name=log.title(), value=log)
     for log in VALID_LOGS
 ]
 
+DEM_COLOR = 0x2b2d31
+
 # =========================
-# EMBED
+# EMBEDS
 # =========================
-def success_embed(text):
-
+def log_embed(text, success=True):
     return discord.Embed(
-        description=f"✅ {text}",
-        color=discord.Color.green()
-    )
-
-def error_embed(text):
-
-    return discord.Embed(
-        description=f"❌ {text}",
-        color=discord.Color.red()
+        description=f"{'✅' if success else '❌'} {text}",
+        color=discord.Color.green() if success else discord.Color.red()
     )
 
 # =========================
-# LOG CONTROL
+# LOG CONTROL COG
 # =========================
 class LogControl(commands.Cog):
-
     def __init__(self, bot):
-
         self.bot = bot
 
     # =========================
-    # LOG ENABLE
+    # TOGGLE LOGS
     # =========================
-    @commands.hybrid_command(
-        name="log_enable",
-        help="Enable a specific log type.",
-        extras={
-            "example": "!log_enable ban",
-            "tips": "Enable only logs you actually need."
-        }
-    )
+    @commands.hybrid_command(name="log_enable", description="Enable a specific log type.")
     @app_commands.choices(log=LOG_CHOICES)
     @commands.has_permissions(manage_guild=True)
-    async def log_enable(
-        self,
-        ctx,
-        log: app_commands.Choice[str]
-    ):
-        """Enable a log type."""
+    async def log_enable(self, ctx, log: app_commands.Choice[str]):
+        await set_log_state(ctx.guild.id, log.value, True)
+        await ctx.send(embed=log_embed(f"Enabled `{log.value}` logs."), ephemeral=True)
 
-        set_log(
-            ctx.guild.id,
-            log.value,
-            True
-        )
-
-        await ctx.send(
-            embed=success_embed(
-                f"Enabled `{log.value}` logs"
-            )
-        )
-
-    # =========================
-    # LOG DISABLE
-    # =========================
-    @commands.hybrid_command(
-        name="log_disable",
-        help="Disable a specific log type.",
-        extras={
-            "example": "!log_disable spam",
-            "tips": "Disable unnecessary logs to reduce spam."
-        }
-    )
+    @commands.hybrid_command(name="log_disable", description="Disable a specific log type.")
     @app_commands.choices(log=LOG_CHOICES)
     @commands.has_permissions(manage_guild=True)
-    async def log_disable(
-        self,
-        ctx,
-        log: app_commands.Choice[str]
-    ):
-        """Disable a log type."""
-
-        set_log(
-            ctx.guild.id,
-            log.value,
-            False
-        )
-
-        await ctx.send(
-            embed=success_embed(
-                f"Disabled `{log.value}` logs"
-            )
-        )
+    async def log_disable(self, ctx, log: app_commands.Choice[str]):
+        await set_log_state(ctx.guild.id, log.value, False)
+        await ctx.send(embed=log_embed(f"Disabled `{log.value}` logs."), ephemeral=True)
 
     # =========================
-    # SET MOD LOG
+    # CHANNEL SETUP
     # =========================
-    @commands.hybrid_command(
-        name="set_modlog",
-        help="Set the moderation log channel.",
-        extras={
-            "example": "!set_modlog #mod-logs",
-            "tips": "Moderation actions will be sent here."
-        }
-    )
+    @commands.hybrid_command(name="set_modlog", description="Set the moderation log channel.")
     @commands.has_permissions(manage_guild=True)
-    async def set_modlog(
-        self,
-        ctx,
-        channel: discord.TextChannel = None
-    ):
-        """Set the moderation log channel."""
+    async def set_modlog(self, ctx, channel: discord.TextChannel):
+        # Permission check
+        if not channel.permissions_for(ctx.guild.me).send_messages:
+            return await ctx.send(embed=log_embed("I don't have permission to send messages in that channel!", False))
 
-        if channel is None:
-
-            return await ctx.send(
-                embed=error_embed(
-                    "Usage: !set_modlog #channel"
-                )
-            )
-
-        logs = get_logs(ctx.guild.id)
-
+        logs = await get_logs(ctx.guild.id)
         bot_log = logs[1] if logs else None
 
-        set_log_channel(
-            ctx.guild.id,
-            mod_log=channel.id,
-            bot_log=bot_log
-        )
+        await set_log_channel(ctx.guild.id, mod_log=channel.id, bot_log=bot_log)
+        await ctx.send(embed=log_embed(f"Moderation logs set to {channel.mention}"))
 
-        await ctx.send(
-            embed=success_embed(
-                f"Moderation logs set to {channel.mention}"
-            )
-        )
-
-    # =========================
-    # SET BOT LOG
-    # =========================
-    @commands.hybrid_command(
-        name="set_botlog",
-        help="Set the bot/system log channel.",
-        extras={
-            "example": "!set_botlog #bot-logs",
-            "tips": "Security and ticket logs will appear here."
-        }
-    )
+    @commands.hybrid_command(name="set_botlog", description="Set the bot/system log channel.")
     @commands.has_permissions(manage_guild=True)
-    async def set_botlog(
-        self,
-        ctx,
-        channel: discord.TextChannel = None
-    ):
-        """Set the bot log channel."""
+    async def set_botlog(self, ctx, channel: discord.TextChannel):
+        if not channel.permissions_for(ctx.guild.me).send_messages:
+            return await ctx.send(embed=log_embed("I don't have permission to send messages in that channel!", False))
 
-        if channel is None:
-
-            return await ctx.send(
-                embed=error_embed(
-                    "Usage: !set_botlog #channel"
-                )
-            )
-
-        logs = get_logs(ctx.guild.id)
-
+        logs = await get_logs(ctx.guild.id)
         mod_log = logs[0] if logs else None
 
-        set_log_channel(
-            ctx.guild.id,
-            mod_log=mod_log,
-            bot_log=channel.id
-        )
-
-        await ctx.send(
-            embed=success_embed(
-                f"Bot logs set to {channel.mention}"
-            )
-        )
+        await set_log_channel(ctx.guild.id, mod_log=mod_log, bot_log=channel.id)
+        await ctx.send(embed=log_embed(f"Bot logs set to {channel.mention}"))
 
     # =========================
-    # VIEW LOG SETTINGS
+    # STATUS VIEW
     # =========================
-    @commands.hybrid_command(
-        name="log_settings",
-        help="View current logging setup.",
-        extras={
-            "example": "!log_settings",
-            "tips": "Useful for checking active log channels."
-        }
-    )
+    @commands.hybrid_command(name="log_settings", description="View current logging setup.")
     @commands.has_permissions(manage_guild=True)
-    async def log_settings(
-        self,
-        ctx
-    ):
-        """View current logging configuration."""
+    async def log_settings(self, ctx):
+        logs = await get_logs(ctx.guild.id)
+        
+        mod_log = f"<#{logs[0]}>" if logs and logs[0] else "`Not Set`"
+        bot_log = f"<#{logs[1]}>" if logs and logs[1] else "`Not Set`"
 
-        logs = get_logs(ctx.guild.id)
-
-        mod_log = "Not set"
-        bot_log = "Not set"
-
-        if logs:
-
-            if logs[0]:
-                mod_log = f"<#{logs[0]}>"
-
-            if logs[1]:
-                bot_log = f"<#{logs[1]}>"
-
-        embed = discord.Embed(
-            title="📁 Logging Settings",
-            color=discord.Color.blurple()
-        )
-
-        embed.add_field(
-            name="🛠️ Moderation Logs",
-            value=mod_log,
-            inline=False
-        )
-
-        embed.add_field(
-            name="🤖 Bot Logs",
-            value=bot_log,
-            inline=False
-        )
-
-        embed.add_field(
-            name="📌 Available Log Types",
-            value=", ".join(VALID_LOGS),
-            inline=False
-        )
-
+        embed = discord.Embed(title="📁 Dem Logging Configuration", color=DEM_COLOR)
+        embed.add_field(name="🛠️ Moderation Channel", value=mod_log, inline=True)
+        embed.add_field(name="🤖 Bot/System Channel", value=bot_log, inline=True)
+        
+        # Show all valid logs in a clean list
+        embed.add_field(name="📌 Log Types", value="`" + "`, `".join(VALID_LOGS) + "`", inline=False)
+        
         await ctx.send(embed=embed)
 
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
-
     await bot.add_cog(LogControl(bot))
+    
