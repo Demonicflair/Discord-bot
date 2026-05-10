@@ -1,379 +1,164 @@
-# giveaway.py
-
 import discord
-from discord.ext import commands
-import sqlite3
+from discord.ext import commands, tasks
+from discord import app_commands
+import aiosqlite
 import asyncio
 import random
 import time
+import datetime
 
-from utils.logger import get_logs, save_log, is_log_enabled
-
-# =========================
-# DATABASE
-# =========================
-db = sqlite3.connect("giveaways.db", check_same_thread=False)
-cursor = db.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS giveaways(
-    message_id INTEGER,
-    guild_id INTEGER,
-    channel_id INTEGER,
-    prize TEXT,
-    winners INTEGER,
-    end_time INTEGER,
-    ended INTEGER
-)
-""")
-
-db.commit()
+DB_PATH = "bot.db"
+BRAND_COLOR = 0x2b2d31
 
 # =========================
-# LOG SYSTEM
+# PERSISTENT GIVEAWAY BUTTON
 # =========================
-async def send_log(guild, text):
-
-    logs = get_logs(guild.id)
-
-    if logs and is_log_enabled(guild.id, "giveaway"):
-
-        channel = guild.get_channel(logs[1])
-
-        if channel:
-            embed = discord.Embed(
-                description=text,
-                color=discord.Color.blurple()
-            )
-
-            await channel.send(embed=embed)
-
-    save_log(guild.id, 0, "giveaway", text)
-
-
-# =========================
-# GIVEAWAY BUTTON
-# =========================
-class GiveawayButton(discord.ui.View):
-
+class GiveawayView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(
-        label="🎉 Join Giveaway",
-        style=discord.ButtonStyle.green,
-        custom_id="giveaway_join"
+        label="Join Giveaway",
+        emoji="🎉",
+        style=discord.ButtonStyle.blurple,
+        custom_id="dem:giveaway:join"
     )
-    async def join(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
+    async def join_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT req_role, black_role FROM giveaways WHERE message_id=?", (interaction.message.id,)) as cur:
+                data = await cur.fetchone()
+        
+        if not data: return
 
+        req_role_id, black_role_id = data[0], data[1]
+
+        # 1. Check Blacklist
+        if black_role_id and interaction.user.get_role(black_role_id):
+            return await interaction.response.send_message("❌ You have a blacklisted role and cannot join.", ephemeral=True)
+
+        # 2. Check Requirement
+        if req_role_id and not interaction.user.get_role(req_role_id):
+            role = interaction.guild.get_role(req_role_id)
+            return await interaction.response.send_message(f"❌ You need the {role.mention} role to join!", ephemeral=True)
+
+        # 3. Add Entry
         message = interaction.message
-
-        users = [
-            user async for user in message.reactions[0].users()
-            if not user.bot
-        ]
-
+        users = [user async for user in message.reactions[0].users()] if message.reactions else []
+        
         if interaction.user in users:
-
-            return await interaction.response.send_message(
-                "❌ You already joined.",
-                ephemeral=True
-            )
-
+            return await interaction.response.send_message("❌ You already joined!", ephemeral=True)
+            
         await message.add_reaction("🎉")
+        await interaction.response.send_message("✅ Success! You are now entered.", ephemeral=True)
 
-        await interaction.response.send_message(
-            "✅ Joined giveaway!",
-            ephemeral=True
-        )
-
-
-# =========================
-# GIVEAWAY COG
-# =========================
 class Giveaway(commands.Cog):
-
     def __init__(self, bot):
-
         self.bot = bot
-        self.bot.loop.create_task(self.giveaway_loop())
+        self.giveaway_loop.start()
 
-    # =========================
-    # GIVEAWAY LOOP
-    # =========================
+    async def cog_load(self):
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS giveaways (
+                    message_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER,
+                    channel_id INTEGER,
+                    prize TEXT,
+                    winners INTEGER,
+                    end_time INTEGER,
+                    ended INTEGER DEFAULT 0,
+                    req_role INTEGER,
+                    black_role INTEGER
+                )
+            """)
+            await db.commit()
+
+    def parse_time(self, time_str):
+        time_dict = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        unit = time_str[-1]
+        try:
+            val = int(time_str[:-1])
+            return val * time_dict[unit]
+        except: return None
+
+    @tasks.loop(seconds=10)
     async def giveaway_loop(self):
+        now = int(time.time())
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT * FROM giveaways WHERE ended=0 AND end_time <= ?", (now,)) as cursor:
+                ended_giveaways = await cursor.fetchall()
+        for g in ended_giveaways:
+            await self.end_g(g)
 
-        await self.bot.wait_until_ready()
-
-        while not self.bot.is_closed():
-
-            now = int(time.time())
-
-            cursor.execute(
-                "SELECT * FROM giveaways WHERE ended=0"
-            )
-
-            giveaways = cursor.fetchall()
-
-            for g in giveaways:
-
-                message_id = g[0]
-                guild_id = g[1]
-                channel_id = g[2]
-                prize = g[3]
-                winner_count = g[4]
-                end_time = g[5]
-
-                if now >= end_time:
-
-                    guild = self.bot.get_guild(guild_id)
-
-                    if not guild:
-                        continue
-
-                    channel = guild.get_channel(channel_id)
-
-                    if not channel:
-                        continue
-
-                    try:
-
-                        message = await channel.fetch_message(message_id)
-
-                    except:
-                        continue
-
-                    users = []
-
-                    for reaction in message.reactions:
-
-                        if reaction.emoji == "🎉":
-
-                            users = [
-                                user async for user in reaction.users()
-                                if not user.bot
-                            ]
-
-                    if not users:
-
-                        embed = discord.Embed(
-                            title="🎉 Giveaway Ended",
-                            description=f"Prize: **{prize}**\nNo winners.",
-                            color=discord.Color.red()
-                        )
-
-                        await channel.send(embed=embed)
-
-                    else:
-
-                        winners = random.sample(
-                            users,
-                            min(winner_count, len(users))
-                        )
-
-                        mentions = ", ".join(
-                            w.mention for w in winners
-                        )
-
-                        embed = discord.Embed(
-                            title="🎉 Giveaway Ended",
-                            description=(
-                                f"🏆 Prize: **{prize}**\n"
-                                f"🎊 Winner(s): {mentions}"
-                            ),
-                            color=discord.Color.green()
-                        )
-
-                        await channel.send(embed=embed)
-
-                        await send_log(
-                            guild,
-                            f"🎉 Giveaway ended → {prize}"
-                        )
-
-                    cursor.execute(
-                        "UPDATE giveaways SET ended=1 WHERE message_id=?",
-                        (message_id,)
-                    )
-
-                    db.commit()
-
-            await asyncio.sleep(10)
-
-    # =========================
-    # START GIVEAWAY
-    # =========================
-    @commands.hybrid_command(
-        name="giveaway",
-        help="Start a giveaway.",
-        extras={
-            "example": "!giveaway 60 1 Nitro",
-            "tips": "Time is in seconds."
-        }
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def giveaway(
-        self,
-        ctx,
-        duration: int = None,
-        winners: int = 1,
-        *,
-        prize=None
-    ):
-        """Start a giveaway."""
-
-        if duration is None or prize is None:
-
-            return await ctx.send(
-                "❌ Usage: !giveaway <seconds> <winners> <prize>"
-            )
-
-        end = int(time.time()) + duration
-
-        embed = discord.Embed(
-            title="🎉 Giveaway",
-            description=(
-                f"🏆 Prize: **{prize}**\n"
-                f"👑 Winners: **{winners}**\n"
-                f"⏰ Ends: <t:{end}:R>\n\n"
-                f"Click the button below to join!"
-            ),
-            color=discord.Color.blurple()
-        )
-
-        msg = await ctx.send(
-            embed=embed,
-            view=GiveawayButton()
-        )
-
-        await msg.add_reaction("🎉")
-
-        cursor.execute(
-            "INSERT INTO giveaways VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                msg.id,
-                ctx.guild.id,
-                ctx.channel.id,
-                prize,
-                winners,
-                end,
-                0
-            )
-        )
-
-        db.commit()
-
-        await send_log(
-            ctx.guild,
-            f"🎉 Giveaway started → {prize}"
-        )
-
-    # =========================
-    # REROLL
-    # =========================
-    @commands.hybrid_command(
-        name="reroll",
-        help="Reroll a giveaway.",
-        extras={
-            "example": "!reroll 123456789",
-            "tips": "Use giveaway message ID."
-        }
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def reroll(
-        self,
-        ctx,
-        message_id: int = None
-    ):
-        """Reroll a giveaway."""
-
-        if not message_id:
-
-            return await ctx.send(
-                "❌ Usage: !reroll <message_id>"
-            )
+    async def end_g(self, data):
+        msg_id, guild_id, chan_id, prize, w_count = data[0], data[1], data[2], data[3], data[4]
+        guild = self.bot.get_guild(guild_id)
+        if not guild: return
+        channel = guild.get_channel(chan_id)
+        if not channel: return
 
         try:
+            message = await channel.fetch_message(msg_id)
+            users = [u async for u in message.reactions[0].users() if not u.bot]
+        except: return
 
-            message = await ctx.channel.fetch_message(message_id)
-
-        except:
-
-            return await ctx.send(
-                "❌ Giveaway not found."
-            )
-
-        users = []
-
-        for reaction in message.reactions:
-
-            if reaction.emoji == "🎉":
-
-                users = [
-                    user async for user in reaction.users()
-                    if not user.bot
-                ]
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("UPDATE giveaways SET ended=1 WHERE message_id=?", (msg_id,))
+            await db.commit()
 
         if not users:
+            return await channel.send(f"⚠️ No winners for **{prize}** (No entries).")
 
-            return await ctx.send(
-                "❌ No valid users."
-            )
+        winners = random.sample(users, min(len(users), w_count))
+        mentions = ", ".join(w.mention for w in winners)
 
-        winner = random.choice(users)
+        # Notify Winners in DM
+        for w in winners:
+            try: await w.send(f"🎉 **Congratulations!** You won **{prize}** in **{guild.name}**!")
+            except: pass
 
-        embed = discord.Embed(
-            title="🎉 Giveaway Rerolled",
-            description=f"🏆 New Winner: {winner.mention}",
-            color=discord.Color.green()
-        )
+        embed = discord.Embed(title="🎁 Giveaway Ended!", description=f"**Prize:** {prize}\n**Winners:** {mentions}", color=discord.Color.gold())
+        await channel.send(f"Congratulations {mentions}!", embed=embed)
 
+    # =========================
+    # COMMANDS
+    # =========================
+    @commands.hybrid_command(name="gstart", description="🎊 Start an advanced giveaway.")
+    @commands.has_permissions(manage_guild=True)
+    @app_commands.describe(duration="10m, 1h, 1d", winners="Count", prize="Item", role_req="Required role", blacklist="Forbidden role")
+    async def gstart(self, ctx, duration: str, winners: int, prize: str, role_req: discord.Role = None, blacklist: discord.Role = None):
+        seconds = self.parse_time(duration)
+        if not seconds: return await ctx.send("❌ Use format: 10m, 1h, 1d")
+
+        end_ts = int(time.time()) + seconds
+        embed = discord.Embed(title="🎉 Giveaway Time!", description=f"🏆 Prize: **{prize}**\n👑 Winners: **{winners}**\n⏰ Ends: <t:{end_ts}:R>", color=BRAND_COLOR)
+        
+        req_text = f"\n✅ Requirement: {role_req.mention}" if role_req else ""
+        black_text = f"\n🚫 Blacklist: {blacklist.mention}" if blacklist else ""
+        embed.add_field(name="Details", value=f"Host: {ctx.author.mention}{req_text}{black_text}")
+
+        msg = await ctx.send(embed=embed, view=GiveawayView())
+        await msg.add_reaction("🎉")
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("INSERT INTO giveaways VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)", 
+                           (msg.id, ctx.guild.id, ctx.channel.id, prize, winners, end_ts, 
+                            role_req.id if role_req else None, blacklist.id if blacklist else None))
+            await db.commit()
+
+    @commands.hybrid_command(name="glist", description="📜 List all active giveaways in this server.")
+    async def glist(self, ctx):
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute("SELECT prize, end_time, message_id FROM giveaways WHERE guild_id=? AND ended=0", (ctx.guild.id,)) as cur:
+                active = await cur.fetchall()
+        
+        if not active: return await ctx.send("There are no active giveaways.")
+
+        embed = discord.Embed(title="📜 Active Giveaways", color=BRAND_COLOR)
+        for prize, end, msg_id in active:
+            embed.add_field(name=prize, value=f"Ends: <t:{end}:R>\n[Jump to Message](https://discord.com/channels/{ctx.guild.id}/{ctx.channel.id}/{msg_id})", inline=False)
         await ctx.send(embed=embed)
 
-    # =========================
-    # END GIVEAWAY
-    # =========================
-    @commands.hybrid_command(
-        name="endgiveaway",
-        help="Force end a giveaway.",
-        extras={
-            "example": "!endgiveaway 123456789",
-            "tips": "Ends instantly."
-        }
-    )
-    @commands.has_permissions(manage_guild=True)
-    async def endgiveaway(
-        self,
-        ctx,
-        message_id: int = None
-    ):
-        """End giveaway early."""
-
-        if not message_id:
-
-            return await ctx.send(
-                "❌ Usage: !endgiveaway <message_id>"
-            )
-
-        cursor.execute(
-            "UPDATE giveaways SET end_time=? WHERE message_id=?",
-            (1, message_id)
-        )
-
-        db.commit()
-
-        await ctx.send("✅ Giveaway ending shortly.")
-
-
-# =========================
-# SETUP
-# =========================
 async def setup(bot):
-
-    bot.add_view(GiveawayButton())
-
+    bot.add_view(GiveawayView())
     await bot.add_cog(Giveaway(bot))
