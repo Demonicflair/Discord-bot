@@ -1,46 +1,70 @@
+# utils/config.py
+
 import os
 from dotenv import load_dotenv
 
-# Load .env file if running locally
 load_dotenv()
 
 # =========================
-# 🔐 SECURE TOKENS
+# 🔐 BOT CONFIG
 # =========================
-# Default to None so the bot can throw a clean error if missing
+
 TOKEN = os.getenv("TOKEN")
+PREFIX = "!"
 
 # =========================
-# 🛡️ SECURITY & ANTI-NUKE
+# 🗄️ DATABASE
 # =========================
-# Add your ID and your trusted Co-Owners here
-WHITELIST = [123456789012345678] 
 
-# Threshold for Anti-Nuke (Actions per minute before lockdown)
+DB_PATH = "dem.db"
+
+# =========================
+# 🎨 BRANDING
+# =========================
+
+BRAND_COLOR = 0x2B2D31
+BOT_NAME = "Dem Security"
+
+# =========================
+# 🛡️ SECURITY SYSTEM
+# =========================
+
+WHITELIST = [
+    123456789012345678
+]
+
 ANTI_NUKE_LIMIT = 3
 
+SCAM_PATTERN = r"(free.*nitro|nitro.*free|steam.*gift|claim.*reward|discord.*gift)"
+
+BAD_WORDS = [
+    "badword1",
+    "badword2"
+]
+
+ANTI_LINK = True
+
 # =========================
-# 📢 DEFAULT NAMING
+# 📁 LOGGING
 # =========================
-# These are used by setup_logs.py if no custom names are set
+
 MOD_LOG_NAME = "mod-logs"
 BOT_LOG_NAME = "bot-logs"
 LOG_CATEGORY_NAME = "SERVER LOGS"
 
 # =========================
-# 🎫 TICKET SETTINGS
+# 🎫 TICKETS
 # =========================
-# Unique ID for ticket naming (e.g., ticket-0117)
-TICKET_TAG = "0117"
+
 TICKET_CATEGORY_NAME = "TICKETS"
+TICKET_TAG = "0117"
 
 # =========================
-# 📊 LEVELING SYSTEM
+# 📈 LEVELING
 # =========================
-# Experience gained per message
+
 XP_PER_MESSAGE = 15
 
-# Role Rewards
 LEVEL_ROLES = {
     5: "Bronze Member",
     10: "Silver Member",
@@ -49,13 +73,14 @@ LEVEL_ROLES = {
 }
 
 # =========================
-# 👮 STAFF & ROLES
+# 👮 STAFF
 # =========================
+
 STAFF_ROLE_NAME = "Staff"
 AUTO_ROLE_NAME = "Member"
 
 # =========================
-# 🚫 AUTOMOD
+# 🚂 RAILWAY
 # =========================
-BAD_WORDS = ["badword1", "badword2"]
-ANTI_LINK = True
+
+RAILWAY_ENVIRONMENT = os.getenv("RAILWAY_ENVIRONMENT")
