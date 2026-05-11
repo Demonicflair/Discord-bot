@@ -3,20 +3,21 @@ from discord.ext import commands
 import asyncio
 import aiosqlite
 
-from utils.logger import DB_PATH, get_logs # Using the DB_PATH from our new logger
+from utils.logger import DB_PATH, get_logs
+from utils.config import (
+    MOD_LOG_NAME,
+    BOT_LOG_NAME,
+    LOG_CATEGORY_NAME
+)
 
-# =========================
-# CONFIG
-# =========================
-MOD_LOG_NAME = "mod-logs"
-BOT_LOG_NAME = "bot-logs"
-LOG_CATEGORY_NAME = "SERVER LOGS"
 DEM_COLOR = 0x2b2d31
+
 
 # =========================
 # EMBED HELPER
 # =========================
 def build_embed(title, description=None, color=DEM_COLOR):
+
     return discord.Embed(
         title=title,
         description=description,
@@ -24,105 +25,311 @@ def build_embed(title, description=None, color=DEM_COLOR):
         timestamp=discord.utils.utcnow()
     )
 
+
+# =========================
+# SETUP LOGS COG
+# =========================
 class SetupLogs(commands.Cog):
+
     def __init__(self, bot):
         self.bot = bot
 
     # =========================
-    # CREATE LOGS LOGIC
+    # CREATE LOG SYSTEM
     # =========================
     async def create_logs(self, guild):
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT * FROM log_channels WHERE guild_id=?", (guild.id,)) as cur:
-                if await cur.fetchone():
-                    return False # Already setup
 
-        # Setup Permissions: Hide from everyone, show to Admin & Bot
+        # =========================
+        # CHECK EXISTING SETUP
+        # =========================
+        async with aiosqlite.connect(DB_PATH) as db:
+
+            async with db.execute(
+                "SELECT mod_log, bot_log FROM log_channels WHERE guild_id=?",
+                (guild.id,)
+            ) as cursor:
+
+                existing = await cursor.fetchone()
+
+        # =========================
+        # PERMISSIONS
+        # =========================
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True)
+            guild.default_role: discord.PermissionOverwrite(
+                view_channel=False
+            ),
+
+            guild.me: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                manage_messages=True,
+                read_message_history=True
+            )
         }
 
-        # Auto-add Administrator roles to the view list
+        # Add Admin Roles
         for role in guild.roles:
+
             if role.permissions.administrator:
-                overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
 
-        # 1. Get or Create Category
-        category = discord.utils.get(guild.categories, name=LOG_CATEGORY_NAME)
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True,
+                    send_messages=True,
+                    read_message_history=True
+                )
+
+        # =========================
+        # CATEGORY
+        # =========================
+        category = discord.utils.get(
+            guild.categories,
+            name=LOG_CATEGORY_NAME
+        )
+
         if not category:
-            category = await guild.create_category(LOG_CATEGORY_NAME, overwrites=overwrites)
 
-        # 2. Get or Create Channels
-        mod_log = discord.utils.get(guild.text_channels, name=MOD_LOG_NAME)
+            try:
+                category = await guild.create_category(
+                    LOG_CATEGORY_NAME,
+                    overwrites=overwrites,
+                    reason="Dem Logging System Setup"
+                )
+
+            except discord.Forbidden:
+                return False
+
+        # =========================
+        # MOD LOG CHANNEL
+        # =========================
+        mod_log = discord.utils.get(
+            guild.text_channels,
+            name=MOD_LOG_NAME
+        )
+
         if not mod_log:
-            mod_log = await guild.create_text_channel(MOD_LOG_NAME, category=category, topic="Dem | Moderation Actions")
 
-        bot_log = discord.utils.get(guild.text_channels, name=BOT_LOG_NAME)
+            try:
+                mod_log = await guild.create_text_channel(
+                    MOD_LOG_NAME,
+                    category=category,
+                    topic="Dem | Moderation Logs"
+                )
+
+            except discord.Forbidden:
+                return False
+
+        # =========================
+        # BOT LOG CHANNEL
+        # =========================
+        bot_log = discord.utils.get(
+            guild.text_channels,
+            name=BOT_LOG_NAME
+        )
+
         if not bot_log:
-            bot_log = await guild.create_text_channel(BOT_LOG_NAME, category=category, topic="Dem | System & Security Logs")
 
-        # 3. Database Update
+            try:
+                bot_log = await guild.create_text_channel(
+                    BOT_LOG_NAME,
+                    category=category,
+                    topic="Dem | Security & System Logs"
+                )
+
+            except discord.Forbidden:
+                return False
+
+        # =========================
+        # SAVE TO DATABASE
+        # =========================
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT OR REPLACE INTO log_channels (guild_id, mod_log, bot_log) VALUES (?, ?, ?)",
-                           (guild_id, mod_log.id, bot_log.id))
+
+            await db.execute("""
+                INSERT OR REPLACE INTO log_channels
+                (guild_id, mod_log, bot_log)
+                VALUES (?, ?, ?)
+            """, (
+                guild.id,
+                mod_log.id,
+                bot_log.id
+            ))
+
             await db.commit()
-        
+
+        # =========================
+        # SEND READY MESSAGE
+        # =========================
+        try:
+            await mod_log.send(
+                embed=build_embed(
+                    "🛡️ Moderation Logs Ready",
+                    "This channel will now track moderation actions."
+                )
+            )
+
+            await bot_log.send(
+                embed=build_embed(
+                    "🤖 System Logs Ready",
+                    "This channel will now track security and bot events."
+                )
+            )
+
+        except:
+            pass
+
         return True
 
     # =========================
-    # LISTENERS
+    # AUTO SETUP ON JOIN
     # =========================
     @commands.Cog.listener()
     async def on_guild_join(self, guild):
-        await self.create_logs(guild)
 
+        await asyncio.sleep(3)
+
+        try:
+            await self.create_logs(guild)
+
+        except Exception as e:
+            print(f"[AUTO SETUP ERROR] {e}")
+
+    # =========================
+    # SELF HEALING
+    # =========================
     @commands.Cog.listener()
     async def on_guild_channel_delete(self, channel):
-        if not isinstance(channel, discord.TextChannel): return
+
+        if not isinstance(channel, discord.TextChannel):
+            return
 
         logs = await get_logs(channel.guild.id)
-        if not logs: return
 
-        mod_id, bot_id = logs
-        if channel.id not in [mod_id, bot_id]: return
+        if not logs:
+            return
 
-        # Self-Healing: Recreate the deleted channel
-        await asyncio.sleep(2) # Prevent rate limits
-        new_ch = await channel.guild.create_text_channel(
-            channel.name, 
-            category=channel.category,
-            topic="Dem | Auto-Restored Log Channel"
+        mod_log_id, bot_log_id = logs
+
+        if channel.id not in [mod_log_id, bot_log_id]:
+            return
+
+        await asyncio.sleep(2)
+
+        try:
+
+            new_channel = await channel.guild.create_text_channel(
+                name=channel.name,
+                category=channel.category,
+                topic="Dem | Auto Restored Log Channel"
+            )
+
+        except discord.Forbidden:
+            return
+
+        field = (
+            "mod_log"
+            if channel.id == mod_log_id
+            else "bot_log"
         )
 
-        field = "mod_log" if channel.id == mod_id else "bot_log"
         async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(f"UPDATE log_channels SET {field}=? WHERE guild_id=?", (new_ch.id, channel.guild.id))
+
+            await db.execute(
+                f"UPDATE log_channels SET {field}=? WHERE guild_id=?",
+                (
+                    new_channel.id,
+                    channel.guild.id
+                )
+            )
+
             await db.commit()
-        
-        await new_ch.send(embed=build_embed("♻️ Channel Restored", f"The `{channel.name}` was deleted and has been automatically recreated.", discord.Color.orange()))
+
+        try:
+
+            await new_channel.send(
+                embed=build_embed(
+                    "♻️ Channel Restored",
+                    f"`{channel.name}` was deleted and automatically recreated.",
+                    discord.Color.orange()
+                )
+            )
+
+        except:
+            pass
 
     # =========================
-    # HYBRID COMMANDS
+    # SETUP COMMAND
     # =========================
-    @commands.hybrid_command(name="setuplogs", description="Automatically configure Dem's logging system.")
+    @commands.hybrid_command(
+        name="setuplogs",
+        description="Setup Dem logging system."
+    )
     @commands.has_permissions(administrator=True)
     async def setuplogs(self, ctx):
-        success = await self.create_logs(ctx.guild)
-        if success:
-            await ctx.send(embed=build_embed("✅ Setup Complete", "Created log category and channels successfully."))
-        else:
-            await ctx.send(embed=build_embed("⚠️ Already Setup", "Logging channels already exist in the database. Use `!resetlogs` if you want to rebuild them.", discord.Color.gold()))
 
-    @commands.hybrid_command(name="resetlogs", description="Delete current log settings and recreate them.")
+        success = await self.create_logs(ctx.guild)
+
+        if success:
+
+            await ctx.send(
+                embed=build_embed(
+                    "✅ Logging Setup Complete",
+                    "Mod logs and bot logs are now configured."
+                )
+            )
+
+        else:
+
+            await ctx.send(
+                embed=build_embed(
+                    "❌ Setup Failed",
+                    "I need Manage Channels permission.",
+                    discord.Color.red()
+                )
+            )
+
+    # =========================
+    # RESET LOGS
+    # =========================
+    @commands.hybrid_command(
+        name="resetlogs",
+        description="Reset and rebuild log channels."
+    )
     @commands.has_permissions(administrator=True)
     async def resetlogs(self, ctx):
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("DELETE FROM log_channels WHERE guild_id=?", (ctx.guild.id,))
-            await db.commit()
-        
-        await self.create_logs(ctx.guild)
-        await ctx.send(embed=build_embed("♻️ System Reset", "All log channel mappings have been cleared and recreated."))
 
+        async with aiosqlite.connect(DB_PATH) as db:
+
+            await db.execute(
+                "DELETE FROM log_channels WHERE guild_id=?",
+                (ctx.guild.id,)
+            )
+
+            await db.commit()
+
+        success = await self.create_logs(ctx.guild)
+
+        if success:
+
+            await ctx.send(
+                embed=build_embed(
+                    "♻️ Logging System Reset",
+                    "Log channels were recreated successfully."
+                )
+            )
+
+        else:
+
+            await ctx.send(
+                embed=build_embed(
+                    "❌ Reset Failed",
+                    "I couldn't recreate the channels.",
+                    discord.Color.red()
+                )
+            )
+
+
+# =========================
+# LOAD COG
+# =========================
 async def setup(bot):
+
     await bot.add_cog(SetupLogs(bot))
