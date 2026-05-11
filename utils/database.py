@@ -67,6 +67,41 @@ async def initialize_db():
         """)
 
         # =========================
+        # TICKET SETTINGS
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_settings (
+            guild_id INTEGER PRIMARY KEY,
+            category_id INTEGER,
+            log_channel INTEGER,
+            panel_channel INTEGER,
+            support_role INTEGER
+        )
+        """)
+
+        # =========================
+        # TICKET COUNTER
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS ticket_counter (
+            guild_id INTEGER PRIMARY KEY,
+            count INTEGER DEFAULT 0
+        )
+        """)
+
+        # =========================
+        # ACTIVE TICKETS
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS active_tickets (
+            channel_id INTEGER PRIMARY KEY,
+            guild_id INTEGER,
+            user_id INTEGER,
+            created_at INTEGER
+        )
+        """)
+
+        # =========================
         # WELCOME SETTINGS
         # =========================
         await db.execute("""
