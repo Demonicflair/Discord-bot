@@ -3,12 +3,19 @@ import aiosqlite
 DB_PATH = "data.db"
 
 
+# =========================
+# DATABASE INITIALIZER
+# =========================
 async def initialize_db():
+
     async with aiosqlite.connect(DB_PATH) as db:
 
-        # Better SQLite performance
+        # =========================
+        # SQLITE OPTIMIZATION
+        # =========================
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA foreign_keys=ON")
 
         # =========================
         # SETTINGS
@@ -28,8 +35,8 @@ async def initialize_db():
         await db.execute("""
         CREATE TABLE IF NOT EXISTS warnings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            guild_id INTEGER,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
             reason TEXT,
             moderator_id INTEGER,
             timestamp INTEGER
@@ -37,7 +44,7 @@ async def initialize_db():
         """)
 
         # =========================
-        # SECURITY
+        # SECURITY SCORES
         # =========================
         await db.execute("""
         CREATE TABLE IF NOT EXISTS security_scores (
@@ -49,7 +56,7 @@ async def initialize_db():
         """)
 
         # =========================
-        # TICKETS
+        # TICKET BLACKLIST
         # =========================
         await db.execute("""
         CREATE TABLE IF NOT EXISTS ticket_blacklist (
@@ -60,7 +67,7 @@ async def initialize_db():
         """)
 
         # =========================
-        # WELCOME SYSTEM
+        # WELCOME SETTINGS
         # =========================
         await db.execute("""
         CREATE TABLE IF NOT EXISTS welcome_settings (
@@ -111,7 +118,7 @@ async def initialize_db():
         """)
 
         # =========================
-        # LOG HISTORY
+        # LOG HISTORY / CASES
         # =========================
         await db.execute("""
         CREATE TABLE IF NOT EXISTS logs_data (
@@ -125,8 +132,61 @@ async def initialize_db():
         )
         """)
 
+        # =========================
+        # GIVEAWAYS
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS giveaways (
+            message_id INTEGER PRIMARY KEY,
+            guild_id INTEGER,
+            channel_id INTEGER,
+            prize TEXT,
+            winners INTEGER,
+            ends_at INTEGER,
+            hosted_by INTEGER
+        )
+        """)
+
+        # =========================
+        # LEVELING SYSTEM
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS levels (
+            user_id INTEGER,
+            guild_id INTEGER,
+            xp INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 0,
+            PRIMARY KEY(user_id, guild_id)
+        )
+        """)
+
+        # =========================
+        # ECONOMY (FUTURE READY)
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS economy (
+            user_id INTEGER,
+            guild_id INTEGER,
+            balance INTEGER DEFAULT 0,
+            bank INTEGER DEFAULT 0,
+            PRIMARY KEY(user_id, guild_id)
+        )
+        """)
+
+        # =========================
+        # FINAL SAVE
+        # =========================
         await db.commit()
 
 
+# =========================
+# GET DATABASE CONNECTION
+# =========================
 async def get_db():
-    return await aiosqlite.connect(DB_PATH)
+
+    db = await aiosqlite.connect(DB_PATH)
+
+    await db.execute("PRAGMA journal_mode=WAL")
+    await db.execute("PRAGMA foreign_keys=ON")
+
+    return db
