@@ -1,9 +1,16 @@
+# utils/logger.py
+
 import discord
 import aiosqlite
 
-DB_PATH = "data.db"
+from utils.config import (
+    DB_PATH,
+    BRAND_COLOR
+)
 
-# Cache for faster performance
+# =========================
+# CACHE
+# =========================
 _settings_cache = {}
 
 
@@ -11,7 +18,9 @@ _settings_cache = {}
 # GET LOG CHANNELS
 # =========================
 async def get_logs(guild_id: int):
+
     async with aiosqlite.connect(DB_PATH) as db:
+
         async with db.execute(
             """
             SELECT mod_log, bot_log
@@ -27,7 +36,20 @@ async def get_logs(guild_id: int):
 # =========================
 # SET LOG CHANNELS
 # =========================
-async def set_log_channels(guild_id: int, mod_log: int, bot_log: int):
+async def set_log_channels(
+    guild_id: int,
+    mod_log: int = None,
+    bot_log: int = None
+):
+
+    old = await get_logs(guild_id)
+
+    old_mod = old[0] if old else None
+    old_bot = old[1] if old else None
+
+    mod_log = mod_log if mod_log is not None else old_mod
+    bot_log = bot_log if bot_log is not None else old_bot
+
     async with aiosqlite.connect(DB_PATH) as db:
 
         await db.execute(
@@ -47,7 +69,7 @@ async def set_log_channels(guild_id: int, mod_log: int, bot_log: int):
 
 
 # =========================
-# SAVE CASE LOG
+# SAVE LOG CASE
 # =========================
 async def save_log(
     guild_id: int,
@@ -80,13 +102,61 @@ async def save_log(
 
 
 # =========================
+# SEND LOG EMBED
+# =========================
+async def send_log(
+    guild,
+    log_type: str,
+    embed: discord.Embed
+):
+
+    logs = await get_logs(guild.id)
+
+    if not logs:
+        return
+
+    mod_log_id, bot_log_id = logs
+
+    mod_types = [
+        "ban",
+        "kick",
+        "warn",
+        "mute",
+        "unmute",
+        "clear"
+    ]
+
+    target_channel_id = (
+        mod_log_id
+        if log_type in mod_types
+        else bot_log_id
+    )
+
+    if not target_channel_id:
+        return
+
+    channel = guild.get_channel(target_channel_id)
+
+    if not channel:
+        return
+
+    try:
+        await channel.send(embed=embed)
+
+    except:
+        pass
+
+
+# =========================
 # LOG ENABLE CHECK
 # =========================
-async def is_log_enabled(guild_id: int, log_type: str):
+async def is_log_enabled(
+    guild_id: int,
+    log_type: str
+):
 
     key = (guild_id, log_type)
 
-    # Check cache first
     if key in _settings_cache:
         return _settings_cache[key]
 
@@ -108,14 +178,13 @@ async def is_log_enabled(guild_id: int, log_type: str):
 
             enabled = True if data is None else bool(data[0])
 
-            # Save to cache
             _settings_cache[key] = enabled
 
             return enabled
 
 
 # =========================
-# CHANGE LOG STATE
+# SET LOG STATE
 # =========================
 async def set_log_state(
     guild_id: int,
@@ -140,7 +209,6 @@ async def set_log_state(
 
         await db.commit()
 
-    # Update cache instantly
     _settings_cache[(guild_id, log_type)] = state
 
 
@@ -193,7 +261,25 @@ async def get_case(case_id: int):
 
 
 # =========================
-# EMBED BUILDER
+# DELETE CASE
+# =========================
+async def delete_case(case_id: int):
+
+    async with aiosqlite.connect(DB_PATH) as db:
+
+        await db.execute(
+            """
+            DELETE FROM logs_data
+            WHERE case_id = ?
+            """,
+            (case_id,)
+        )
+
+        await db.commit()
+
+
+# =========================
+# BUILD CASE EMBED
 # =========================
 def build_case_embed(case_data):
 
@@ -212,8 +298,8 @@ def build_case_embed(case_data):
 
     embed = discord.Embed(
         title=f"📁 Case #{case_id}",
-        description=f"Action: **{log_type.upper()}**",
-        color=0x2b2d31
+        description=f"Action Type: **{log_type.upper()}**",
+        color=BRAND_COLOR
     )
 
     embed.add_field(
@@ -223,6 +309,7 @@ def build_case_embed(case_data):
     )
 
     if moderator_id:
+
         embed.add_field(
             name="🛠️ Moderator",
             value=f"<@{moderator_id}>\n`{moderator_id}`",
@@ -231,12 +318,34 @@ def build_case_embed(case_data):
 
     embed.add_field(
         name="📝 Details",
-        value=(content[:1000] + "...") if len(content) > 1000 else content,
+        value=(
+            content[:1000] + "..."
+            if len(content) > 1000
+            else content
+        ),
         inline=False
     )
 
     embed.set_footer(
         text=f"Dem Logging System • {timestamp}"
+    )
+
+    return embed
+
+
+# =========================
+# QUICK LOG EMBED
+# =========================
+def quick_embed(
+    title: str,
+    description: str,
+    color=BRAND_COLOR
+):
+
+    embed = discord.Embed(
+        title=title,
+        description=description,
+        color=color
     )
 
     return embed
