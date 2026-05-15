@@ -1,11 +1,20 @@
-import discord
-from discord.ext import commands
-from discord import app_commands
-import aiosqlite
 import asyncio
 import time
+import aiosqlite
+import discord
+
+from collections import defaultdict
+from discord.ext import commands
+from discord import app_commands
 
 from utils.dispatch import dispatch_log
+from utils.embeds import (
+    success_embed,
+    error_embed,
+    warning_embed,
+    base_embed
+)
+from utils.checks import is_owner_or_admin
 from utils.config import (
     DB_PATH,
     BRAND_COLOR,
@@ -14,8 +23,9 @@ from utils.config import (
 )
 
 # =========================
-# ANTINUKE SYSTEM
+# ANTINUKE
 # =========================
+
 class AntiNuke(commands.Cog):
 
     def __init__(self, bot):
@@ -23,12 +33,35 @@ class AntiNuke(commands.Cog):
         self.bot = bot
 
         # {(guild_id, user_id, action): [timestamps]}
-        self.cooldowns = {}
+        self.cooldowns = defaultdict(list)
+
+    # =========================
+    # DATABASE SETUP
+    # =========================
+
+    async def cog_load(self):
+
+        async with aiosqlite.connect(DB_PATH) as db:
+
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS antinuke_whitelist(
+                guild_id INTEGER,
+                user_id INTEGER,
+                PRIMARY KEY(guild_id, user_id)
+            )
+            """)
+
+            await db.commit()
 
     # =========================
     # WHITELIST CHECK
     # =========================
-    async def is_whitelisted(self, guild_id, user_id):
+
+    async def is_whitelisted(
+        self,
+        guild_id: int,
+        user_id: int
+    ):
 
         if user_id in WHITELIST:
             return True
@@ -36,8 +69,10 @@ class AntiNuke(commands.Cog):
         async with aiosqlite.connect(DB_PATH) as db:
 
             async with db.execute("""
-                SELECT 1 FROM antinuke_whitelist
-                WHERE guild_id=? AND user_id=?
+                SELECT 1
+                FROM antinuke_whitelist
+                WHERE guild_id = ?
+                AND user_id = ?
             """, (
                 guild_id,
                 user_id
@@ -48,23 +83,20 @@ class AntiNuke(commands.Cog):
     # =========================
     # RATE LIMIT CHECK
     # =========================
+
     async def check_threshold(
         self,
-        guild_id,
-        user_id,
-        action
+        guild_id: int,
+        user_id: int,
+        action: str
     ):
 
         key = (guild_id, user_id, action)
 
         now = time.time()
 
-        if key not in self.cooldowns:
-            self.cooldowns[key] = []
-
         self.cooldowns[key].append(now)
 
-        # Keep last 10 sec
         self.cooldowns[key] = [
             t for t in self.cooldowns[key]
             if now - t <= 10
@@ -75,11 +107,12 @@ class AntiNuke(commands.Cog):
     # =========================
     # PUNISHMENT
     # =========================
+
     async def punish(
         self,
-        guild,
-        member,
-        reason
+        guild: discord.Guild,
+        member: discord.Member,
+        reason: str
     ):
 
         if not member:
@@ -88,19 +121,24 @@ class AntiNuke(commands.Cog):
         if member.id == guild.owner_id:
             return
 
+        if member.top_role >= guild.me.top_role:
+            return
+
         try:
 
             await member.ban(
-                reason=f"Dem Anti-Nuke | {reason}"
+                reason=f"Dem Anti-Nuke | {reason}",
+                delete_message_days=1
             )
 
             await dispatch_log(
-                guild,
-                "antinuke",
+                guild=guild,
+                log_type="antinuke",
                 content=(
-                    f"🚨 **User Punished**\n\n"
-                    f"**User:** {member.mention}\n"
-                    f"**Reason:** {reason}"
+                    f"🚨 **Anti-Nuke Triggered**\n\n"
+                    f"**User:** {member} ({member.id})\n"
+                    f"**Action:** {reason}\n"
+                    f"**Punishment:** Ban"
                 ),
                 user_id=member.id
             )
@@ -111,270 +149,415 @@ class AntiNuke(commands.Cog):
 
                 await member.edit(
                     roles=[],
-                    reason="Dem Anti-Nuke Emergency"
+                    reason="Dem Anti-Nuke Emergency Lockdown"
                 )
 
             except:
                 pass
 
     # =========================
-    # CHANNEL DELETE
+    # AUDIT LOG FETCH
     # =========================
-    @commands.Cog.listener()
-    async def on_guild_channel_delete(self, channel):
 
-        guild = channel.guild
+    async def fetch_entry(
+        self,
+        guild: discord.Guild,
+        action
+    ):
 
         await asyncio.sleep(1)
 
+        async for entry in guild.audit_logs(
+            limit=1,
+            action=action
+        ):
+
+            return entry
+
+    # =========================
+    # CHANNEL DELETE
+    # =========================
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(
+        self,
+        channel
+    ):
+
+        guild = channel.guild
+
         try:
 
-            async for entry in guild.audit_logs(
-                limit=1,
-                action=discord.AuditLogAction.channel_delete
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.channel_delete
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if user.bot:
+                return
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
             ):
+                return
 
-                user = entry.user
+            triggered = await self.check_threshold(
+                guild.id,
+                user.id,
+                "channel_delete"
+            )
 
-                if user.bot:
-                    return
+            if not triggered:
+                return
 
-                if await self.is_whitelisted(
-                    guild.id,
-                    user.id
-                ):
-                    return
+            # =========================
+            # RESTORE CHANNEL
+            # =========================
 
-                triggered = await self.check_threshold(
-                    guild.id,
-                    user.id,
-                    "channel_delete"
+            try:
+
+                restored = await channel.clone(
+                    reason="Dem Anti-Nuke Recovery"
                 )
 
-                if not triggered:
-                    return
-
-                # =========================
-                # RECOVER CHANNEL
-                # =========================
-                try:
-
-                    restored = await channel.clone(
-                        reason="Dem Anti-Nuke Recovery"
-                    )
-
-                    await restored.edit(
-                        position=channel.position
-                    )
-
-                    await restored.send(
-                        embed=discord.Embed(
-                            title="🛡️ Channel Restored",
-                            description=(
-                                "This channel was automatically restored "
-                                "by Dem Anti-Nuke."
-                            ),
-                            color=discord.Color.orange()
-                        )
-                    )
-
-                except:
-                    pass
-
-                # =========================
-                # PUNISH USER
-                # =========================
-                await self.punish(
-                    guild,
-                    user,
-                    "Mass Channel Deletion"
+                await restored.edit(
+                    position=channel.position
                 )
+
+                await restored.send(
+                    embed=warning_embed(
+                        "🛡️ Channel automatically restored by Anti-Nuke."
+                    )
+                )
+
+            except:
+                pass
+
+            await self.punish(
+                guild,
+                user,
+                "Mass Channel Deletion"
+            )
 
         except Exception as e:
-            print(f"[ANTINUKE CHANNEL ERROR] {e}")
+            print(f"[ANTINUKE CHANNEL DELETE] {e}")
+
+    # =========================
+    # CHANNEL CREATE
+    # =========================
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(
+        self,
+        channel
+    ):
+
+        guild = channel.guild
+
+        try:
+
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.channel_create
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if user.bot:
+                return
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
+            ):
+                return
+
+            triggered = await self.check_threshold(
+                guild.id,
+                user.id,
+                "channel_create"
+            )
+
+            if not triggered:
+                return
+
+            try:
+                await channel.delete(
+                    reason="Dem Anti-Nuke Protection"
+                )
+            except:
+                pass
+
+            await self.punish(
+                guild,
+                user,
+                "Mass Channel Creation"
+            )
+
+        except Exception as e:
+            print(f"[ANTINUKE CHANNEL CREATE] {e}")
 
     # =========================
     # ROLE DELETE
     # =========================
+
     @commands.Cog.listener()
-    async def on_guild_role_delete(self, role):
+    async def on_guild_role_delete(
+        self,
+        role
+    ):
 
         guild = role.guild
 
-        await asyncio.sleep(1)
+        try:
+
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.role_delete
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if user.bot:
+                return
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
+            ):
+                return
+
+            triggered = await self.check_threshold(
+                guild.id,
+                user.id,
+                "role_delete"
+            )
+
+            if not triggered:
+                return
+
+            await self.punish(
+                guild,
+                user,
+                "Mass Role Deletion"
+            )
+
+        except Exception as e:
+            print(f"[ANTINUKE ROLE DELETE] {e}")
+
+    # =========================
+    # ROLE CREATE
+    # =========================
+
+    @commands.Cog.listener()
+    async def on_guild_role_create(
+        self,
+        role
+    ):
+
+        guild = role.guild
 
         try:
 
-            async for entry in guild.audit_logs(
-                limit=1,
-                action=discord.AuditLogAction.role_delete
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.role_create
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if user.bot:
+                return
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
             ):
+                return
 
-                user = entry.user
+            triggered = await self.check_threshold(
+                guild.id,
+                user.id,
+                "role_create"
+            )
 
-                if user.bot:
-                    return
+            if not triggered:
+                return
 
-                if await self.is_whitelisted(
-                    guild.id,
-                    user.id
-                ):
-                    return
-
-                triggered = await self.check_threshold(
-                    guild.id,
-                    user.id,
-                    "role_delete"
+            try:
+                await role.delete(
+                    reason="Dem Anti-Nuke Protection"
                 )
+            except:
+                pass
 
-                if not triggered:
-                    return
-
-                await self.punish(
-                    guild,
-                    user,
-                    "Mass Role Deletion"
-                )
+            await self.punish(
+                guild,
+                user,
+                "Mass Role Creation"
+            )
 
         except Exception as e:
-            print(f"[ANTINUKE ROLE ERROR] {e}")
+            print(f"[ANTINUKE ROLE CREATE] {e}")
 
     # =========================
-    # BOT ADD PROTECTION
+    # BOT ADD
     # =========================
+
     @commands.Cog.listener()
-    async def on_member_join(self, member):
+    async def on_member_join(
+        self,
+        member
+    ):
 
         if not member.bot:
             return
 
         guild = member.guild
 
-        await asyncio.sleep(1)
+        try:
+
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.bot_add
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
+            ):
+                return
+
+            try:
+
+                await member.ban(
+                    reason="Unauthorized Bot Added"
+                )
+
+            except:
+                pass
+
+            await self.punish(
+                guild,
+                user,
+                "Unauthorized Bot Addition"
+            )
+
+            await dispatch_log(
+                guild=guild,
+                log_type="antinuke",
+                content=(
+                    f"🤖 **Unauthorized Bot Blocked**\n\n"
+                    f"**Bot:** {member} ({member.id})\n"
+                    f"**Added By:** {user} ({user.id})"
+                ),
+                user_id=user.id
+            )
+
+        except Exception as e:
+            print(f"[ANTINUKE BOT ADD] {e}")
+
+    # =========================
+    # WEBHOOK CREATE
+    # =========================
+
+    @commands.Cog.listener()
+    async def on_webhooks_update(
+        self,
+        channel
+    ):
+
+        guild = channel.guild
 
         try:
 
-            async for entry in guild.audit_logs(
-                limit=1,
-                action=discord.AuditLogAction.bot_add
+            entry = await self.fetch_entry(
+                guild,
+                discord.AuditLogAction.webhook_create
+            )
+
+            if not entry:
+                return
+
+            user = entry.user
+
+            if user.bot:
+                return
+
+            if await self.is_whitelisted(
+                guild.id,
+                user.id
             ):
+                return
 
-                user = entry.user
+            triggered = await self.check_threshold(
+                guild.id,
+                user.id,
+                "webhook_create"
+            )
 
-                if await self.is_whitelisted(
-                    guild.id,
-                    user.id
-                ):
-                    return
+            if not triggered:
+                return
 
-                # Ban added bot
+            webhooks = await channel.webhooks()
+
+            for webhook in webhooks:
+
                 try:
-
-                    await member.ban(
-                        reason="Unauthorized Bot Added"
-                    )
-
+                    await webhook.delete()
                 except:
                     pass
 
-                # Punish adder
-                await self.punish(
-                    guild,
-                    user,
-                    "Unauthorized Bot Addition"
-                )
-
-                await dispatch_log(
-                    guild,
-                    "antinuke",
-                    content=(
-                        f"🤖 **Unauthorized Bot Blocked**\n\n"
-                        f"**Bot:** {member.mention}\n"
-                        f"**Added By:** {user.mention}"
-                    )
-                )
+            await self.punish(
+                guild,
+                user,
+                "Mass Webhook Creation"
+            )
 
         except Exception as e:
-            print(f"[ANTINUKE BOT ERROR] {e}")
+            print(f"[ANTINUKE WEBHOOK] {e}")
 
     # =========================
-    # MASS ROLE CREATE
+    # GROUP
     # =========================
-    @commands.Cog.listener()
-    async def on_guild_role_create(self, role):
 
-        guild = role.guild
-
-        await asyncio.sleep(1)
-
-        try:
-
-            async for entry in guild.audit_logs(
-                limit=1,
-                action=discord.AuditLogAction.role_create
-            ):
-
-                user = entry.user
-
-                if user.bot:
-                    return
-
-                if await self.is_whitelisted(
-                    guild.id,
-                    user.id
-                ):
-                    return
-
-                triggered = await self.check_threshold(
-                    guild.id,
-                    user.id,
-                    "role_create"
-                )
-
-                if triggered:
-
-                    await role.delete(
-                        reason="Dem Anti-Nuke Protection"
-                    )
-
-                    await self.punish(
-                        guild,
-                        user,
-                        "Mass Role Creation"
-                    )
-
-        except Exception as e:
-            print(f"[ANTINUKE CREATE ERROR] {e}")
-
-    # =========================
-    # ANTINUKE GROUP
-    # =========================
     @commands.hybrid_group(
         name="antinuke",
-        description="Manage Dem Anti-Nuke system."
+        description="Manage Dem Anti-Nuke."
     )
-    @commands.has_permissions(administrator=True)
+    @commands.check(is_owner_or_admin)
     async def antinuke(self, ctx):
 
         if ctx.invoked_subcommand is None:
 
-            embed = discord.Embed(
-                title="🛡️ Anti-Nuke System",
+            embed = base_embed(
+                title="🛡️ Dem Anti-Nuke",
                 description=(
-                    "Use the commands below to configure "
-                    "Dem Anti-Nuke."
-                ),
-                color=BRAND_COLOR
-            )
-
-            embed.add_field(
-                name="Commands",
-                value=(
-                    "`antinuke whitelist`\n"
-                    "`antinuke unwhitelist`\n"
-                    "`antinuke list`"
-                ),
-                inline=False
+                    "Advanced server protection system.\n\n"
+                    "`/antinuke whitelist`\n"
+                    "`/antinuke unwhitelist`\n"
+                    "`/antinuke list`"
+                )
             )
 
             await ctx.send(embed=embed)
@@ -382,9 +565,9 @@ class AntiNuke(commands.Cog):
     # =========================
     # WHITELIST
     # =========================
+
     @antinuke.command(
-        name="whitelist",
-        description="Whitelist a user from Anti-Nuke."
+        name="whitelist"
     )
     async def whitelist(
         self,
@@ -396,7 +579,10 @@ class AntiNuke(commands.Cog):
 
             await db.execute("""
                 INSERT OR REPLACE INTO antinuke_whitelist
-                (guild_id, user_id)
+                (
+                    guild_id,
+                    user_id
+                )
                 VALUES (?, ?)
             """, (
                 ctx.guild.id,
@@ -405,22 +591,18 @@ class AntiNuke(commands.Cog):
 
             await db.commit()
 
-        embed = discord.Embed(
-            description=(
-                f"✅ {user.mention} is now "
-                f"whitelisted from Anti-Nuke."
-            ),
-            color=discord.Color.green()
+        await ctx.send(
+            embed=success_embed(
+                f"{user.mention} added to Anti-Nuke whitelist."
+            )
         )
-
-        await ctx.send(embed=embed)
 
     # =========================
     # UNWHITELIST
     # =========================
+
     @antinuke.command(
-        name="unwhitelist",
-        description="Remove a user from whitelist."
+        name="unwhitelist"
     )
     async def unwhitelist(
         self,
@@ -432,7 +614,8 @@ class AntiNuke(commands.Cog):
 
             await db.execute("""
                 DELETE FROM antinuke_whitelist
-                WHERE guild_id=? AND user_id=?
+                WHERE guild_id = ?
+                AND user_id = ?
             """, (
                 ctx.guild.id,
                 user.id
@@ -440,30 +623,30 @@ class AntiNuke(commands.Cog):
 
             await db.commit()
 
-        embed = discord.Embed(
-            description=(
-                f"✅ Removed {user.mention} "
-                f"from Anti-Nuke whitelist."
-            ),
-            color=discord.Color.orange()
+        await ctx.send(
+            embed=success_embed(
+                f"{user.mention} removed from whitelist."
+            )
         )
 
-        await ctx.send(embed=embed)
+    # =========================
+    # LIST
+    # =========================
 
-    # =========================
-    # LIST WHITELIST
-    # =========================
     @antinuke.command(
-        name="list",
-        description="View Anti-Nuke whitelist."
+        name="list"
     )
-    async def whitelist_list(self, ctx):
+    async def whitelist_list(
+        self,
+        ctx
+    ):
 
         async with aiosqlite.connect(DB_PATH) as db:
 
             async with db.execute("""
-                SELECT user_id FROM antinuke_whitelist
-                WHERE guild_id=?
+                SELECT user_id
+                FROM antinuke_whitelist
+                WHERE guild_id = ?
             """, (
                 ctx.guild.id,
             )) as cursor:
@@ -473,29 +656,30 @@ class AntiNuke(commands.Cog):
         if not data:
 
             return await ctx.send(
-                embed=discord.Embed(
-                    description="❌ No users are whitelisted.",
-                    color=discord.Color.red()
+                embed=error_embed(
+                    "No users are whitelisted."
                 )
             )
 
-        users = []
+        users = "\n".join(
+            f"• <@{row[0]}>"
+            for row in data
+        )
 
-        for row in data:
-            users.append(f"<@{row[0]}>")
-
-        embed = discord.Embed(
+        embed = base_embed(
             title="🛡️ Anti-Nuke Whitelist",
-            description="\n".join(users),
-            color=BRAND_COLOR
+            description=users
         )
 
         await ctx.send(embed=embed)
 
 
 # =========================
-# LOAD COG
+# LOAD
 # =========================
+
 async def setup(bot):
 
-    await bot.add_cog(AntiNuke(bot))
+    await bot.add_cog(
+        AntiNuke(bot)
+    )
