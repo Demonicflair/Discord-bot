@@ -56,6 +56,17 @@ async def initialize_db():
         """)
 
         # =========================
+        # ANTINUKE WHITELIST
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS antinuke_whitelist (
+            guild_id INTEGER,
+            user_id INTEGER,
+            PRIMARY KEY(guild_id, user_id)
+        )
+        """)
+
+        # =========================
         # TICKET BLACKLIST
         # =========================
         await db.execute("""
