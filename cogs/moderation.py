@@ -1,4 +1,5 @@
 import time
+import asyncio
 import discord
 import aiosqlite
 
@@ -8,7 +9,11 @@ from discord import app_commands
 from utils.dispatch import dispatch_log
 
 DB_PATH = "data.db"
+
 MOD_COLOR = 0x2b2d31
+SUCCESS = 0x57F287
+ERROR = 0xED4245
+WARNING = 0xFEE75C
 
 
 class Moderation(commands.Cog):
@@ -16,46 +21,91 @@ class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    # =========================
+    # ==================================================
+    # PREMIUM EMBED
+    # ==================================================
+    def embed(
+        self,
+        title=None,
+        description=None,
+        color=MOD_COLOR
+    ):
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=color
+        )
+
+        embed.set_footer(
+            text="Dem Moderation System"
+        )
+
+        embed.timestamp = discord.utils.utcnow()
+
+        return embed
+
+    # ==================================================
     # HIERARCHY CHECK
-    # =========================
+    # ==================================================
     async def can_moderate(
         self,
         moderator: discord.Member,
         target: discord.Member
     ):
 
-        # Owner bypass
         if moderator.guild.owner == moderator:
             return True
 
-        # Can't moderate yourself
         if moderator.id == target.id:
             return False
 
-        # Can't moderate higher/equal role
+        if target.guild.owner == target:
+            return False
+
         if target.top_role >= moderator.top_role:
             return False
 
-        # Can't moderate bot owner
-        if target.guild.owner == target:
+        if target.top_role >= moderator.guild.me.top_role:
             return False
 
         return True
 
-    # =========================
-    # KICK COMMAND
-    # =========================
+    # ==================================================
+    # DM USER
+    # ==================================================
+    async def dm_user(
+        self,
+        member,
+        action,
+        reason
+    ):
+
+        try:
+
+            embed = self.embed(
+                title=f"You were {action}",
+                description=(
+                    f"**Server:** {member.guild.name}\n"
+                    f"**Reason:** {reason}"
+                ),
+                color=ERROR
+            )
+
+            await member.send(embed=embed)
+
+        except:
+            pass
+
+    # ==================================================
+    # KICK
+    # ==================================================
     @commands.hybrid_command(
         name="kick",
-        description="Kick a member from the server."
+        description="Kick a member."
     )
     @commands.has_permissions(
         kick_members=True
-    )
-    @app_commands.describe(
-        member="Member to kick",
-        reason="Reason for the kick"
     )
     async def kick(
         self,
@@ -71,64 +121,61 @@ class Moderation(commands.Cog):
         ):
 
             return await ctx.send(
-                "❌ You cannot moderate this user."
+                embed=self.embed(
+                    description="❌ You cannot moderate this user.",
+                    color=ERROR
+                )
             )
 
-        try:
+        await self.dm_user(
+            member,
+            "kicked",
+            reason
+        )
 
-            await member.kick(
-                reason=f"{ctx.author} | {reason}"
-            )
+        await member.kick(
+            reason=f"{ctx.author} | {reason}"
+        )
 
-            embed = discord.Embed(
-                description=(
-                    f"👢 {member.mention} was kicked.\n"
-                    f"**Reason:** {reason}"
-                ),
-                color=discord.Color.orange()
-            )
+        embed = self.embed(
+            title="👢 Member Kicked",
+            description=(
+                f"{member.mention} has been removed.\n\n"
+                f"**Reason:** {reason}"
+            ),
+            color=WARNING
+        )
 
-            await ctx.send(embed=embed)
+        await ctx.send(embed=embed)
 
-            await dispatch_log(
-                guild=ctx.guild,
-                log_type="kick",
-                content=(
-                    f"👢 **Kick Action**\n"
-                    f"**User:** {member} ({member.id})\n"
-                    f"**Moderator:** {ctx.author}\n"
-                    f"**Reason:** {reason}"
-                ),
-                user_id=member.id,
-                moderator_id=ctx.author.id
-            )
+        await dispatch_log(
+            guild=ctx.guild,
+            log_type="kick",
+            content=(
+                f"👢 User Kicked\n"
+                f"User: {member} ({member.id})\n"
+                f"Moderator: {ctx.author}\n"
+                f"Reason: {reason}"
+            ),
+            user_id=member.id,
+            moderator_id=ctx.author.id
+        )
 
-        except Exception as error:
-
-            await ctx.send(
-                f"❌ Failed to kick user.\n`{error}`"
-            )
-
-    # =========================
-    # BAN COMMAND
-    # =========================
+    # ==================================================
+    # BAN
+    # ==================================================
     @commands.hybrid_command(
         name="ban",
-        description="Ban a member from the server."
+        description="Ban a member."
     )
     @commands.has_permissions(
         ban_members=True
-    )
-    @app_commands.describe(
-        member="Member to ban",
-        delete_days="Delete message history",
-        reason="Reason for the ban"
     )
     async def ban(
         self,
         ctx,
         member: discord.Member,
-        delete_days: int = 0,
+        delete_days: app_commands.Range[int, 0, 7] = 0,
         *,
         reason: str = "No reason provided"
     ):
@@ -139,99 +186,178 @@ class Moderation(commands.Cog):
         ):
 
             return await ctx.send(
-                "❌ You cannot moderate this user."
+                embed=self.embed(
+                    description="❌ You cannot moderate this user.",
+                    color=ERROR
+                )
             )
 
-        try:
+        await self.dm_user(
+            member,
+            "banned",
+            reason
+        )
 
-            await member.ban(
-                reason=f"{ctx.author} | {reason}",
-                delete_message_days=delete_days
-            )
+        await member.ban(
+            reason=f"{ctx.author} | {reason}",
+            delete_message_days=delete_days
+        )
 
-            embed = discord.Embed(
-                description=(
-                    f"🔨 {member.mention} was banned.\n"
-                    f"**Reason:** {reason}"
-                ),
-                color=discord.Color.red()
-            )
+        embed = self.embed(
+            title="🔨 Member Banned",
+            description=(
+                f"{member.mention} has been banned.\n\n"
+                f"**Reason:** {reason}"
+            ),
+            color=ERROR
+        )
 
-            await ctx.send(embed=embed)
+        await ctx.send(embed=embed)
 
-            await dispatch_log(
-                guild=ctx.guild,
-                log_type="ban",
-                content=(
-                    f"🔨 **Ban Action**\n"
-                    f"**User:** {member} ({member.id})\n"
-                    f"**Moderator:** {ctx.author}\n"
-                    f"**Reason:** {reason}"
-                ),
-                user_id=member.id,
-                moderator_id=ctx.author.id
-            )
+        await dispatch_log(
+            guild=ctx.guild,
+            log_type="ban",
+            content=(
+                f"🔨 User Banned\n"
+                f"User: {member} ({member.id})\n"
+                f"Moderator: {ctx.author}\n"
+                f"Reason: {reason}"
+            ),
+            user_id=member.id,
+            moderator_id=ctx.author.id
+        )
 
-        except Exception as error:
-
-            await ctx.send(
-                f"❌ Failed to ban user.\n`{error}`"
-            )
-
-    # =========================
-    # UNBAN COMMAND
-    # =========================
+    # ==================================================
+    # TEMPBAN
+    # ==================================================
     @commands.hybrid_command(
-        name="unban",
-        description="Unban a user."
+        name="tempban",
+        description="Temporarily ban a member."
     )
     @commands.has_permissions(
         ban_members=True
     )
-    async def unban(
+    async def tempban(
         self,
         ctx,
-        user_id: int
+        member: discord.Member,
+        minutes: int,
+        *,
+        reason: str = "No reason provided"
     ):
 
-        try:
-
-            user = await self.bot.fetch_user(
-                user_id
+        if not await self.can_moderate(
+            ctx.author,
+            member
+        ):
+            return await ctx.send(
+                embed=self.embed(
+                    description="❌ You cannot moderate this user.",
+                    color=ERROR
+                )
             )
 
-            await ctx.guild.unban(user)
+        await member.ban(
+            reason=f"Tempban | {reason}"
+        )
 
-            embed = discord.Embed(
-                description=(
-                    f"✅ Unbanned {user}"
-                ),
-                color=discord.Color.green()
+        embed = self.embed(
+            title="⏳ Temporary Ban",
+            description=(
+                f"{member.mention} banned for `{minutes}` minutes.\n\n"
+                f"**Reason:** {reason}"
+            ),
+            color=ERROR
+        )
+
+        await ctx.send(embed=embed)
+
+        async def unban_later():
+
+            await asyncio.sleep(minutes * 60)
+
+            try:
+                await ctx.guild.unban(member)
+            except:
+                pass
+
+        self.bot.loop.create_task(
+            unban_later()
+        )
+
+    # ==================================================
+    # TIMEOUT
+    # ==================================================
+    @commands.hybrid_command(
+        name="timeout",
+        description="Timeout a member."
+    )
+    @commands.has_permissions(
+        moderate_members=True
+    )
+    async def timeout(
+        self,
+        ctx,
+        member: discord.Member,
+        minutes: int,
+        *,
+        reason: str = "No reason provided"
+    ):
+
+        if not await self.can_moderate(
+            ctx.author,
+            member
+        ):
+            return
+
+        until = discord.utils.utcnow() + discord.timedelta(
+            minutes=minutes
+        )
+
+        await member.timeout(
+            until,
+            reason=reason
+        )
+
+        embed = self.embed(
+            title="🔇 Member Timed Out",
+            description=(
+                f"{member.mention} timed out for `{minutes}` minutes.\n\n"
+                f"**Reason:** {reason}"
             )
+        )
 
-            await ctx.send(embed=embed)
+        await ctx.send(embed=embed)
 
-            await dispatch_log(
-                guild=ctx.guild,
-                log_type="unban",
-                content=(
-                    f"✅ **Unban Action**\n"
-                    f"**User:** {user} ({user.id})\n"
-                    f"**Moderator:** {ctx.author}"
-                ),
-                user_id=user.id,
-                moderator_id=ctx.author.id
-            )
+    # ==================================================
+    # UNTIMEOUT
+    # ==================================================
+    @commands.hybrid_command(
+        name="untimeout",
+        description="Remove timeout from a member."
+    )
+    @commands.has_permissions(
+        moderate_members=True
+    )
+    async def untimeout(
+        self,
+        ctx,
+        member: discord.Member
+    ):
 
-        except Exception as error:
+        await member.timeout(None)
 
-            await ctx.send(
-                f"❌ Failed to unban user.\n`{error}`"
-            )
+        embed = self.embed(
+            title="🔊 Timeout Removed",
+            description=f"{member.mention} is no longer timed out.",
+            color=SUCCESS
+        )
 
-    # =========================
-    # WARN COMMAND
-    # =========================
+        await ctx.send(embed=embed)
+
+    # ==================================================
+    # WARN
+    # ==================================================
     @commands.hybrid_command(
         name="warn",
         description="Warn a member."
@@ -248,14 +374,11 @@ class Moderation(commands.Cog):
     ):
 
         if member.bot:
-
-            return await ctx.send(
-                "❌ You cannot warn bots."
-            )
+            return
 
         async with aiosqlite.connect(DB_PATH) as db:
 
-            await db.execute(
+            cursor = await db.execute(
                 """
                 INSERT INTO warnings
                 (
@@ -276,34 +399,60 @@ class Moderation(commands.Cog):
                 )
             )
 
+            warn_id = cursor.lastrowid
+
             await db.commit()
 
-        embed = discord.Embed(
+        embed = self.embed(
+            title="⚠️ User Warned",
             description=(
-                f"⚠️ {member.mention} has been warned.\n"
+                f"{member.mention} has been warned.\n\n"
+                f"**Warning ID:** `{warn_id}`\n"
                 f"**Reason:** {reason}"
             ),
-            color=MOD_COLOR
+            color=WARNING
         )
 
         await ctx.send(embed=embed)
 
-        await dispatch_log(
-            guild=ctx.guild,
-            log_type="warn",
-            content=(
-                f"⚠️ **Warning Issued**\n"
-                f"**User:** {member} ({member.id})\n"
-                f"**Moderator:** {ctx.author}\n"
-                f"**Reason:** {reason}"
-            ),
-            user_id=member.id,
-            moderator_id=ctx.author.id
+    # ==================================================
+    # REMOVE WARNING
+    # ==================================================
+    @commands.hybrid_command(
+        name="removewarn",
+        description="Remove a warning."
+    )
+    @commands.has_permissions(
+        manage_messages=True
+    )
+    async def removewarn(
+        self,
+        ctx,
+        warn_id: int
+    ):
+
+        async with aiosqlite.connect(DB_PATH) as db:
+
+            await db.execute(
+                """
+                DELETE FROM warnings
+                WHERE id = ?
+                """,
+                (warn_id,)
+            )
+
+            await db.commit()
+
+        await ctx.send(
+            embed=self.embed(
+                description=f"✅ Removed warning `{warn_id}`",
+                color=SUCCESS
+            )
         )
 
-    # =========================
-    # CLEAR COMMAND
-    # =========================
+    # ==================================================
+    # PURGE
+    # ==================================================
     @commands.hybrid_command(
         name="clear",
         description="Delete messages."
@@ -314,49 +463,98 @@ class Moderation(commands.Cog):
     async def clear(
         self,
         ctx,
-        amount: int
+        amount: app_commands.Range[int, 1, 100]
     ):
-
-        if amount <= 0:
-
-            return await ctx.send(
-                "❌ Amount must be above 0."
-            )
-
-        if amount > 100:
-
-            return await ctx.send(
-                "❌ Maximum is 100 messages."
-            )
 
         deleted = await ctx.channel.purge(
             limit=amount + 1
         )
 
         msg = await ctx.send(
-            f"🧹 Deleted `{len(deleted) - 1}` messages."
+            embed=self.embed(
+                description=f"🧹 Deleted `{len(deleted)-1}` messages.",
+                color=SUCCESS
+            )
         )
 
-        await dispatch_log(
-            guild=ctx.guild,
-            log_type="clear",
-            content=(
-                f"🧹 **Messages Cleared**\n"
-                f"**Moderator:** {ctx.author}\n"
-                f"**Amount:** {len(deleted) - 1}\n"
-                f"**Channel:** {ctx.channel.mention}"
-            ),
-            moderator_id=ctx.author.id
+        await asyncio.sleep(5)
+
+        await msg.delete()
+
+    # ==================================================
+    # SOFTBAN
+    # ==================================================
+    @commands.hybrid_command(
+        name="softban",
+        description="Softban a member."
+    )
+    @commands.has_permissions(
+        ban_members=True
+    )
+    async def softban(
+        self,
+        ctx,
+        member: discord.Member,
+        *,
+        reason: str = "No reason provided"
+    ):
+
+        await member.ban(
+            delete_message_days=1,
+            reason=reason
         )
 
-        await msg.delete(delay=5)
+        await ctx.guild.unban(member)
 
-    # =========================
-    # WARNS COMMAND
-    # =========================
+        await ctx.send(
+            embed=self.embed(
+                title="🧹 Softban Executed",
+                description=(
+                    f"{member.mention} was softbanned.\n\n"
+                    f"**Reason:** {reason}"
+                ),
+                color=WARNING
+            )
+        )
+
+    # ==================================================
+    # NICKNAME
+    # ==================================================
+    @commands.hybrid_command(
+        name="nickname",
+        description="Change a member's nickname."
+    )
+    @commands.has_permissions(
+        manage_nicknames=True
+    )
+    async def nickname(
+        self,
+        ctx,
+        member: discord.Member,
+        *,
+        nickname: str
+    ):
+
+        await member.edit(
+            nick=nickname
+        )
+
+        await ctx.send(
+            embed=self.embed(
+                description=(
+                    f"✏️ Updated nickname for "
+                    f"{member.mention}"
+                ),
+                color=SUCCESS
+            )
+        )
+
+    # ==================================================
+    # WARNINGS
+    # ==================================================
     @commands.hybrid_command(
         name="warnings",
-        description="Check a user's warnings."
+        description="View warnings."
     )
     async def warnings(
         self,
@@ -368,7 +566,7 @@ class Moderation(commands.Cog):
 
             async with db.execute(
                 """
-                SELECT reason, moderator_id, timestamp
+                SELECT id, reason, moderator_id, timestamp
                 FROM warnings
                 WHERE user_id = ?
                 AND guild_id = ?
@@ -385,23 +583,26 @@ class Moderation(commands.Cog):
         if not data:
 
             return await ctx.send(
-                f"✅ {member} has no warnings."
+                embed=self.embed(
+                    description=(
+                        f"✅ {member.mention} "
+                        f"has no warnings."
+                    ),
+                    color=SUCCESS
+                )
             )
 
-        embed = discord.Embed(
+        embed = self.embed(
             title=f"⚠️ Warnings for {member}",
-            color=MOD_COLOR
+            color=WARNING
         )
 
-        for index, warn in enumerate(
-            data[:10],
-            start=1
-        ):
+        for warn in data[:10]:
 
-            reason, moderator_id, timestamp = warn
+            warn_id, reason, moderator_id, timestamp = warn
 
             embed.add_field(
-                name=f"Warning #{index}",
+                name=f"Warning #{warn_id}",
                 value=(
                     f"**Reason:** {reason}\n"
                     f"**Moderator:** <@{moderator_id}>\n"
@@ -413,11 +614,8 @@ class Moderation(commands.Cog):
         await ctx.send(embed=embed)
 
 
-# =========================
-# LOAD COG
-# =========================
 async def setup(bot):
 
     await bot.add_cog(
         Moderation(bot)
-    )
+        )
