@@ -23,7 +23,18 @@ from cogs.tickets import (
     TicketControls
 )
 
-from cogs.giveaway import GiveawayView
+# =========================
+# OPTIONAL GIVEAWAY VIEW
+# =========================
+
+try:
+
+    from cogs.giveaways import GiveawayView
+    GIVEAWAY_VIEW_EXISTS = True
+
+except Exception:
+
+    GIVEAWAY_VIEW_EXISTS = False
 
 # =========================
 # MAIN BOT CLASS
@@ -77,6 +88,7 @@ class DemBot(commands.Bot):
         except Exception as error:
 
             print(f"❌ Database Error:\n{error}")
+            traceback.print_exc()
 
         # =========================
         # PERSISTENT VIEWS
@@ -86,7 +98,9 @@ class DemBot(commands.Bot):
 
             self.add_view(TicketView())
             self.add_view(TicketControls())
-            self.add_view(GiveawayView())
+
+            if GIVEAWAY_VIEW_EXISTS:
+                self.add_view(GiveawayView())
 
             print("✅ Persistent views loaded")
 
@@ -105,6 +119,11 @@ class DemBot(commands.Bot):
         print("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         print("📦 Loading Cogs")
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+        if not os.path.exists("./cogs"):
+
+            print("❌ cogs folder not found")
+            return
 
         for file in sorted(os.listdir("./cogs")):
 
