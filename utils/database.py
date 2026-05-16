@@ -16,6 +16,7 @@ async def initialize_db():
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("PRAGMA temp_store=MEMORY")
 
         # =========================
         # SETTINGS
@@ -41,6 +42,11 @@ async def initialize_db():
             moderator_id INTEGER,
             timestamp INTEGER
         )
+        """)
+
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_warnings_user
+        ON warnings(user_id, guild_id)
         """)
 
         # =========================
@@ -112,6 +118,11 @@ async def initialize_db():
         )
         """)
 
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_active_tickets
+        ON active_tickets(guild_id, user_id)
+        """)
+
         # =========================
         # WELCOME SETTINGS
         # =========================
@@ -178,6 +189,16 @@ async def initialize_db():
         )
         """)
 
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_user
+        ON logs_data(guild_id, user_id)
+        """)
+
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_type
+        ON logs_data(guild_id, type)
+        """)
+
         # =========================
         # GIVEAWAYS
         # =========================
@@ -206,8 +227,13 @@ async def initialize_db():
         )
         """)
 
+        await db.execute("""
+        CREATE INDEX IF NOT EXISTS idx_levels
+        ON levels(guild_id, xp)
+        """)
+
         # =========================
-        # ECONOMY (FUTURE READY)
+        # ECONOMY
         # =========================
         await db.execute("""
         CREATE TABLE IF NOT EXISTS economy (
@@ -220,13 +246,40 @@ async def initialize_db():
         """)
 
         # =========================
+        # REACTION ROLES
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS reaction_roles (
+            guild_id INTEGER,
+            channel_id INTEGER,
+            message_id INTEGER,
+            role_id INTEGER,
+            emoji TEXT,
+            PRIMARY KEY(message_id, role_id, emoji)
+        )
+        """)
+
+        # =========================
+        # COMMAND COOLDOWNS
+        # =========================
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS command_usage (
+            guild_id INTEGER,
+            user_id INTEGER,
+            command_name TEXT,
+            uses INTEGER DEFAULT 0,
+            PRIMARY KEY(guild_id, user_id, command_name)
+        )
+        """)
+
+        # =========================
         # FINAL SAVE
         # =========================
         await db.commit()
 
 
 # =========================
-# GET DATABASE CONNECTION
+# SAFE DATABASE CONNECTION
 # =========================
 async def get_db():
 
@@ -234,5 +287,8 @@ async def get_db():
 
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
+    await db.execute("PRAGMA synchronous=NORMAL")
+
+    db.row_factory = aiosqlite.Row
 
     return db
