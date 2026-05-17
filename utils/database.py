@@ -1,6 +1,6 @@
 import aiosqlite
 
-DB_PATH = "data.db"
+from utils.config import DB_PATH
 
 
 # =========================
