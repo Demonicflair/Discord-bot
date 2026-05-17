@@ -42,7 +42,10 @@ try:
 except Exception:
 
     TICKET_VIEWS = False
-    logger.warning("Ticket views failed to import.")
+
+    logger.exception(
+        "Ticket views failed to import"
+    )
 
 try:
 
@@ -53,7 +56,10 @@ try:
 except Exception:
 
     GIVEAWAY_VIEW_EXISTS = False
-    logger.warning("Giveaway view failed to import.")
+
+    logger.exception(
+        "Giveaway view failed to import"
+    )
 
 # =========================
 # MAIN BOT CLASS
@@ -66,21 +72,30 @@ class DemBot(commands.Bot):
         intents = discord.Intents.all()
 
         super().__init__(
+
             command_prefix=commands.when_mentioned_or(PREFIX),
+
             intents=intents,
+
             help_command=None,
+
             case_insensitive=True,
+
             strip_after_prefix=True,
+
             owner_ids=set(),
+
             allowed_mentions=discord.AllowedMentions(
                 everyone=False,
                 roles=False,
                 replied_user=False
             ),
+
             activity=discord.Activity(
                 type=discord.ActivityType.watching,
                 name="Booting Systems..."
             )
+
         )
 
         self.start_time = discord.utils.utcnow()
@@ -103,11 +118,15 @@ class DemBot(commands.Bot):
 
             await initialize_db()
 
-            logger.info("Database initialized")
+            logger.info(
+                "Database initialized"
+            )
 
         except Exception:
 
-            logger.exception("Database initialization failed")
+            logger.exception(
+                "Database initialization failed"
+            )
 
         # =========================
         # LOAD COGS
@@ -122,7 +141,10 @@ class DemBot(commands.Bot):
 
         if not os.path.exists("./cogs"):
 
-            logger.error("cogs folder not found")
+            logger.error(
+                "cogs folder not found"
+            )
+
             return
 
         for file in sorted(os.listdir("./cogs")):
@@ -143,13 +165,23 @@ class DemBot(commands.Bot):
 
                 loaded += 1
 
-                logger.info(f"Loaded → {cog}")
+                logger.info(
+                    f"Loaded → {cog}"
+                )
 
-            except Exception:
+            except Exception as e:
 
                 failed += 1
 
-                logger.exception(f"Failed loading → {cog}")
+                logger.error(
+                    f"Failed loading → {cog}"
+                )
+
+                logger.error(
+                    f"ERROR: {e}"
+                )
+
+                traceback.print_exc()
 
         logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         logger.info(f"Loaded : {loaded}")
@@ -164,20 +196,33 @@ class DemBot(commands.Bot):
 
             if TICKET_VIEWS:
 
-                self.add_view(TicketView())
-                self.add_view(TicketControls())
+                self.add_view(
+                    TicketView()
+                )
 
-                logger.info("Ticket views loaded")
+                self.add_view(
+                    TicketControls()
+                )
+
+                logger.info(
+                    "Ticket views loaded"
+                )
 
             if GIVEAWAY_VIEW_EXISTS:
 
-                self.add_view(GiveawayView())
+                self.add_view(
+                    GiveawayView()
+                )
 
-                logger.info("Giveaway view loaded")
+                logger.info(
+                    "Giveaway view loaded"
+                )
 
         except Exception:
 
-            logger.exception("Persistent view loading failed")
+            logger.exception(
+                "Persistent view loading failed"
+            )
 
         # =========================
         # SLASH SYNC
@@ -193,7 +238,9 @@ class DemBot(commands.Bot):
 
         except Exception:
 
-            logger.exception("Slash command sync failed")
+            logger.exception(
+                "Slash command sync failed"
+            )
 
     # =========================
     # READY EVENT
@@ -209,8 +256,11 @@ class DemBot(commands.Bot):
             )
 
             await self.change_presence(
+
                 status=discord.Status.online,
+
                 activity=activity
+
             )
 
             logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -222,7 +272,35 @@ class DemBot(commands.Bot):
 
         except Exception:
 
-            logger.exception("Failed during on_ready")
+            logger.exception(
+                "Failed during on_ready"
+            )
+
+    # =========================
+    # GUILD JOIN EVENT
+    # =========================
+
+    async def on_guild_join(
+        self,
+        guild
+    ):
+
+        logger.info(
+            f"Joined guild → {guild.name} ({guild.id})"
+        )
+
+    # =========================
+    # GUILD REMOVE EVENT
+    # =========================
+
+    async def on_guild_remove(
+        self,
+        guild
+    ):
+
+        logger.info(
+            f"Removed from guild → {guild.name} ({guild.id})"
+        )
 
     # =========================
     # PREFIX ERRORS
@@ -234,7 +312,10 @@ class DemBot(commands.Bot):
         error
     ):
 
-        if hasattr(ctx.command, "on_error"):
+        if hasattr(
+            ctx.command,
+            "on_error"
+        ):
             return
 
         error = getattr(
@@ -265,11 +346,14 @@ class DemBot(commands.Bot):
         ):
 
             embed = discord.Embed(
+
                 description=(
                     "❌ You don't have permission "
                     "to use this command."
                 ),
+
                 color=discord.Color.red()
+
             )
 
         # =========================
@@ -286,11 +370,14 @@ class DemBot(commands.Bot):
             )
 
             embed = discord.Embed(
+
                 description=(
                     f"❌ I need these permissions:\n"
                     f"`{perms}`"
                 ),
+
                 color=discord.Color.red()
+
             )
 
         # =========================
@@ -303,11 +390,14 @@ class DemBot(commands.Bot):
         ):
 
             embed = discord.Embed(
+
                 description=(
                     f"⏳ Try again in "
                     f"`{round(error.retry_after, 1)}s`"
                 ),
+
                 color=discord.Color.orange()
+
             )
 
         # =========================
@@ -320,11 +410,14 @@ class DemBot(commands.Bot):
         ):
 
             embed = discord.Embed(
+
                 description=(
                     f"⚠️ Missing parameter:\n"
                     f"`{error.param.name}`"
                 ),
+
                 color=discord.Color.orange()
+
             )
 
         # =========================
@@ -343,8 +436,13 @@ class DemBot(commands.Bot):
         ):
 
             embed = discord.Embed(
-                description="❌ Invalid argument provided.",
+
+                description=(
+                    "❌ Invalid argument provided."
+                ),
+
                 color=discord.Color.red()
+
             )
 
         # =========================
@@ -357,10 +455,13 @@ class DemBot(commands.Bot):
         ):
 
             embed = discord.Embed(
+
                 description=(
                     "❌ You cannot use this command."
                 ),
+
                 color=discord.Color.red()
+
             )
 
         # =========================
@@ -375,12 +476,16 @@ class DemBot(commands.Bot):
             )
 
             embed = discord.Embed(
+
                 title="❌ Unexpected Error",
+
                 description=(
                     "Something went wrong while "
                     "running this command."
                 ),
+
                 color=discord.Color.red()
+
             )
 
         try:
@@ -394,7 +499,9 @@ class DemBot(commands.Bot):
 
         except Exception:
 
-            logger.exception("Failed sending error embed")
+            logger.exception(
+                "Failed sending error embed"
+            )
 
     # =========================
     # SLASH ERRORS
@@ -412,12 +519,16 @@ class DemBot(commands.Bot):
         )
 
         embed = discord.Embed(
+
             title="❌ Error",
+
             description=(
                 "Something went wrong while "
                 "running this command."
             ),
+
             color=discord.Color.red()
+
         )
 
         try:
@@ -446,12 +557,17 @@ class DemBot(commands.Bot):
     # MESSAGE EVENT
     # =========================
 
-    async def on_message(self, message):
+    async def on_message(
+        self,
+        message
+    ):
 
         if message.author.bot:
             return
 
-        await self.process_commands(message)
+        await self.process_commands(
+            message
+        )
 
 
 # =========================
@@ -475,15 +591,23 @@ if __name__ == "__main__":
     try:
 
         bot.run(
+
             TOKEN,
+
             reconnect=True,
+
             log_handler=None
+
         )
 
     except KeyboardInterrupt:
 
-        logger.info("Bot shutdown requested")
+        logger.info(
+            "Bot shutdown requested"
+        )
 
     except Exception:
 
-        logger.exception("Fatal startup error")
+        logger.exception(
+            "Fatal startup error"
+        )
