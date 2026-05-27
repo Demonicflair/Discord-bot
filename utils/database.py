@@ -1,11 +1,23 @@
+import os
 import aiosqlite
 
-from utils.config import DB_PATH
+# =========================
+# DATABASE PATH
+# =========================
+
+DB_FOLDER = "database"
+DB_PATH = os.path.join(DB_FOLDER, "dem.db")
+
+# Ensure database folder exists
+os.makedirs(DB_FOLDER, exist_ok=True)
+
+print(f"[DATABASE] Using database: {DB_PATH}")
 
 
 # =========================
 # DATABASE INITIALIZER
 # =========================
+
 async def initialize_db():
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -13,14 +25,19 @@ async def initialize_db():
         # =========================
         # SQLITE OPTIMIZATION
         # =========================
+
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.execute("PRAGMA temp_store=MEMORY")
+        await db.execute("PRAGMA cache_size=-5000")
+
+        db.row_factory = aiosqlite.Row
 
         # =========================
         # SETTINGS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             guild_id INTEGER,
@@ -33,6 +50,7 @@ async def initialize_db():
         # =========================
         # WARNINGS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS warnings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +70,7 @@ async def initialize_db():
         # =========================
         # SECURITY SCORES
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS security_scores (
             user_id INTEGER,
@@ -64,6 +83,7 @@ async def initialize_db():
         # =========================
         # ANTINUKE WHITELIST
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS antinuke_whitelist (
             guild_id INTEGER,
@@ -75,6 +95,7 @@ async def initialize_db():
         # =========================
         # TICKET BLACKLIST
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS ticket_blacklist (
             guild_id INTEGER,
@@ -86,6 +107,7 @@ async def initialize_db():
         # =========================
         # TICKET SETTINGS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS ticket_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -99,6 +121,7 @@ async def initialize_db():
         # =========================
         # TICKET COUNTER
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS ticket_counter (
             guild_id INTEGER PRIMARY KEY,
@@ -109,6 +132,7 @@ async def initialize_db():
         # =========================
         # ACTIVE TICKETS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS active_tickets (
             channel_id INTEGER PRIMARY KEY,
@@ -126,6 +150,7 @@ async def initialize_db():
         # =========================
         # WELCOME SETTINGS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS welcome_settings (
             guild_id INTEGER PRIMARY KEY,
@@ -141,6 +166,7 @@ async def initialize_db():
         # =========================
         # AFK SYSTEM
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS afk (
             user_id INTEGER,
@@ -154,6 +180,7 @@ async def initialize_db():
         # =========================
         # LOG CHANNELS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS log_channels (
             guild_id INTEGER PRIMARY KEY,
@@ -165,6 +192,7 @@ async def initialize_db():
         # =========================
         # LOG SETTINGS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS log_settings (
             guild_id INTEGER,
@@ -177,6 +205,7 @@ async def initialize_db():
         # =========================
         # LOG HISTORY / CASES
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS logs_data (
             case_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -202,6 +231,7 @@ async def initialize_db():
         # =========================
         # GIVEAWAYS
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS giveaways (
             message_id INTEGER PRIMARY KEY,
@@ -217,6 +247,7 @@ async def initialize_db():
         # =========================
         # LEVELING SYSTEM
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS levels (
             user_id INTEGER,
@@ -235,6 +266,7 @@ async def initialize_db():
         # =========================
         # ECONOMY
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS economy (
             user_id INTEGER,
@@ -248,6 +280,7 @@ async def initialize_db():
         # =========================
         # REACTION ROLES
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS reaction_roles (
             guild_id INTEGER,
@@ -260,8 +293,9 @@ async def initialize_db():
         """)
 
         # =========================
-        # COMMAND COOLDOWNS
+        # COMMAND USAGE
         # =========================
+
         await db.execute("""
         CREATE TABLE IF NOT EXISTS command_usage (
             guild_id INTEGER,
@@ -273,20 +307,81 @@ async def initialize_db():
         """)
 
         # =========================
-        # FINAL SAVE
+        # BOOSTER ROLES
         # =========================
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS booster_roles (
+            guild_id INTEGER,
+            user_id INTEGER,
+            role_id INTEGER,
+            PRIMARY KEY(guild_id, user_id)
+        )
+        """)
+
+        # =========================
+        # AUTOMOD SETTINGS
+        # =========================
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS automod_settings(
+            guild_id INTEGER,
+            feature TEXT,
+            enabled INTEGER,
+            limit_value INTEGER,
+            punishment TEXT,
+            PRIMARY KEY(guild_id, feature)
+        )
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS automod_whitelist(
+            guild_id INTEGER,
+            user_id INTEGER,
+            PRIMARY KEY(guild_id, user_id)
+        )
+        """)
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS automod_warns(
+            guild_id INTEGER,
+            user_id INTEGER,
+            warns INTEGER DEFAULT 0,
+            PRIMARY KEY(guild_id, user_id)
+        )
+        """)
+
+        # =========================
+        # VERIFICATION SYSTEM
+        # =========================
+
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS verification(
+            guild_id INTEGER PRIMARY KEY,
+            role_id INTEGER,
+            channel_id INTEGER
+        )
+        """)
+
+        # =========================
+        # SAVE
+        # =========================
+
         await db.commit()
+
+        print("[DATABASE] Database initialized successfully.")
 
 
 # =========================
 # SAFE DATABASE CONNECTION
 # =========================
+
 async def get_db():
 
     db = await aiosqlite.connect(DB_PATH)
 
-    await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
+    await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA synchronous=NORMAL")
 
     db.row_factory = aiosqlite.Row
