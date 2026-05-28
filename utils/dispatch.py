@@ -1,4 +1,4 @@
-import traceback
+import logging
 import discord
 
 from utils.logger import (
@@ -7,8 +7,12 @@ from utils.logger import (
     save_log
 )
 
+logger = logging.getLogger(
+    "DemBot.Dispatch"
+)
+
 # =========================
-# MODERATION ACTION TYPES
+# MOD ACTIONS
 # =========================
 
 MOD_ACTIONS = {
@@ -28,31 +32,46 @@ MOD_ACTIONS = {
 }
 
 # =========================
-# DEFAULT COLORS
+# COLORS
 # =========================
 
 LOG_COLORS = {
 
     "ban": discord.Color.red(),
+
     "kick": discord.Color.orange(),
+
     "warn": discord.Color.gold(),
+
     "unban": discord.Color.green(),
+
     "mute": discord.Color.dark_orange(),
+
     "unmute": discord.Color.green(),
+
     "timeout": discord.Color.orange(),
+
     "untimeout": discord.Color.green(),
+
     "clear": discord.Color.blurple(),
+
     "ticket_create": discord.Color.blurple(),
+
     "ticket_close": discord.Color.red(),
+
     "giveaway": discord.Color.purple(),
+
     "antinuke": discord.Color.dark_red(),
+
     "join": discord.Color.green(),
+
     "leave": discord.Color.red()
 
 }
 
+
 # =========================
-# SAFE EMBED CREATOR
+# EMBED BUILDER
 # =========================
 
 def build_embed(
@@ -61,194 +80,232 @@ def build_embed(
 ):
 
     return discord.Embed(
+
         description=content,
+
         color=LOG_COLORS.get(
+
             log_type.lower(),
-            0x2b2d31
+
+            0x2B2D31
+
         )
+
     )
 
+
 # =========================
-# CENTRAL LOG DISPATCHER
+# CENTRAL DISPATCH
 # =========================
 
 async def dispatch_log(
+
     guild: discord.Guild,
+
     log_type: str,
+
     content: str = None,
+
     embed: discord.Embed = None,
+
     user_id: int = 0,
+
     moderator_id: int = 0
+
 ):
 
-    # =========================
-    # BASIC SAFETY
-    # =========================
-
     if not guild:
+
         return
 
     if not log_type:
+
         return
 
     try:
 
-        # =========================
-        # CHECK ENABLED
-        # =========================
-
         enabled = await is_log_enabled(
+
             guild.id,
+
             log_type
+
         )
 
         if not enabled:
+
             return
 
-        # =========================
-        # FETCH LOG CHANNELS
-        # =========================
+        logs = await get_logs(
 
-        channels = await get_logs(
             guild.id
+
         )
 
-        if not channels:
+        if not logs:
+
             return
-
-        mod_log_id, bot_log_id = channels
-
-        # =========================
-        # PICK TARGET CHANNEL
-        # =========================
 
         target_channel_id = (
 
-            mod_log_id
+            logs["mod_log"]
 
-            if log_type.lower() in MOD_ACTIONS
+            if log_type.lower()
 
-            else bot_log_id
+            in MOD_ACTIONS
+
+            else logs["bot_log"]
 
         )
 
         if not target_channel_id:
+
             return
 
         channel = guild.get_channel(
+
             target_channel_id
+
         )
 
         if not channel:
+
             return
 
-        # =========================
-        # BOT PERMISSION CHECK
-        # =========================
+        me = guild.me or guild.get_member(
 
-        permissions = channel.permissions_for(
-            guild.me
+            guild._state.self_id
+
         )
 
-        if not permissions.send_messages:
+        if not me:
+
             return
 
-        if embed and not permissions.embed_links:
+        perms = channel.permissions_for(
+
+            me
+
+        )
+
+        if not perms.send_messages:
+
+            return
+
+        if embed and not perms.embed_links:
+
             embed = None
 
-        # =========================
-        # SAVE DATABASE LOG
-        # =========================
+        log_content = (
+
+            content
+
+            or
+
+            "No details provided."
+
+        )
 
         try:
 
             await save_log(
 
                 guild_id=guild.id,
+
                 user_id=user_id,
+
                 log_type=log_type,
-                content=content or "No details provided.",
+
+                content=log_content,
+
                 moderator_id=moderator_id
 
             )
 
         except Exception:
 
-            print("\n[SAVE LOG ERROR]")
-            traceback.print_exc()
+            logger.exception(
 
-        # =========================
-        # AUTO EMBED
-        # =========================
+                "Failed saving log"
 
-        if not embed:
-
-            embed = build_embed(
-                log_type,
-                content or "No details provided."
             )
 
-        # =========================
-        # FOOTER
-        # =========================
+        if embed is None:
 
-        footer_parts = []
+            embed = build_embed(
+
+                log_type,
+
+                log_content
+
+            )
+
+        footer = []
 
         if user_id:
-            footer_parts.append(
+
+            footer.append(
+
                 f"User ID: {user_id}"
+
             )
 
         if moderator_id:
-            footer_parts.append(
+
+            footer.append(
+
                 f"Moderator ID: {moderator_id}"
+
             )
 
-        if footer_parts:
+        if footer:
 
             embed.set_footer(
-                text=" • ".join(footer_parts)
+
+                text=" • ".join(
+
+                    footer
+
+                )
+
             )
 
-        # =========================
-        # TIMESTAMP
-        # =========================
+        embed.timestamp = (
 
-        embed.timestamp = discord.utils.utcnow()
+            discord.utils.utcnow()
 
-        # =========================
-        # SEND LOG
-        # =========================
-
-        await channel.send(
-            embed=embed
         )
 
-    # =========================
-    # MISSING PERMISSIONS
-    # =========================
+        await channel.send(
+
+            embed=embed
+
+        )
 
     except discord.Forbidden:
 
-        print(
-            f"[DISPATCH ERROR] Missing permissions in guild: {guild.name}"
-        )
+        logger.warning(
 
-    # =========================
-    # CHANNEL NOT FOUND
-    # =========================
+            f"No permission "
+
+            f"{guild.id}"
+
+        )
 
     except discord.NotFound:
 
-        print(
-            f"[DISPATCH ERROR] Channel not found in guild: {guild.name}"
-        )
+        logger.warning(
 
-    # =========================
-    # UNKNOWN ERROR
-    # =========================
+            f"Channel missing "
+
+            f"{guild.id}"
+
+        )
 
     except Exception:
 
-        print("\n[DISPATCH ERROR]")
-        traceback.print_exc()
+        logger.exception(
+
+            "Dispatch failed"
+
+            )
