@@ -1,18 +1,14 @@
 import re
 import time
 import discord
-import aiosqlite
 
 from datetime import timedelta
 from collections import defaultdict, deque
 from discord.ext import commands
 
-from utils.database import DB_PATH
+from utils.database import get_db
 from utils.dispatch import dispatch_log
 
-# =========================
-# DEFAULT SETTINGS
-# =========================
 
 DEFAULTS = {
     "spam": (1, 6, "timeout"),
@@ -72,39 +68,42 @@ class VerifyView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
-            async with db.execute(
+            cursor = await db.execute(
                 """
                 SELECT role_id
                 FROM verification
                 WHERE guild_id=?
                 """,
                 (interaction.guild.id,)
-            ) as cursor:
+            )
 
-                data = await cursor.fetchone()
+            data = await cursor.fetchone()
+            await cursor.close()
 
         if not data:
 
             return await interaction.response.send_message(
-                "❌ Verification not configured.",
+                "Verification not configured.",
                 ephemeral=True
             )
 
-        role = interaction.guild.get_role(data[0])
+        role = interaction.guild.get_role(
+            data["role_id"]
+        )
 
         if not role:
 
             return await interaction.response.send_message(
-                "❌ Verification role missing.",
+                "Verification role missing.",
                 ephemeral=True
             )
 
         if role in interaction.user.roles:
 
             return await interaction.response.send_message(
-                "You are already verified.",
+                "Already verified.",
                 ephemeral=True
             )
 
@@ -112,18 +111,18 @@ class VerifyView(discord.ui.View):
 
             await interaction.user.add_roles(
                 role,
-                reason="Verification System"
+                reason="Verification"
             )
 
             await interaction.response.send_message(
-                "✅ Verified.",
+                "Verified successfully.",
                 ephemeral=True
             )
 
-        except:
+        except discord.HTTPException:
 
             await interaction.response.send_message(
-                "❌ Failed.",
+                "Failed to verify.",
                 ephemeral=True
             )
 
@@ -146,97 +145,110 @@ class AdvancedAutomod(commands.Cog):
 
     async def cog_load(self):
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        self.bot.add_view(
+            VerifyView()
+        )
 
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS automod_settings(
-            guild_id INTEGER,
-            feature TEXT,
-            enabled INTEGER,
-            limit_value INTEGER,
-            punishment TEXT,
-            PRIMARY KEY(guild_id,feature))
-            """)
+    async def get_feature(
+        self,
+        guild_id,
+        feature
+    ):
 
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS automod_whitelist(
-            guild_id INTEGER,
-            user_id INTEGER,
-            PRIMARY KEY(guild_id,user_id))
-            """)
+        async with await get_db() as db:
 
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS automod_warns(
-            guild_id INTEGER,
-            user_id INTEGER,
-            warns INTEGER DEFAULT 0,
-            PRIMARY KEY(guild_id,user_id))
-            """)
-
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS verification(
-            guild_id INTEGER PRIMARY KEY,
-            role_id INTEGER,
-            channel_id INTEGER)
-            """)
-
-            await db.commit()
-
-    async def get_feature(self, guild_id, feature):
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            async with db.execute(
+            cursor = await db.execute(
                 """
-                SELECT enabled,limit_value,punishment
+                SELECT enabled,
+                       limit_value,
+                       punishment
                 FROM automod_settings
-                WHERE guild_id=? AND feature=?
+                WHERE guild_id=?
+                AND feature=?
                 """,
-                (guild_id, feature)
-            ) as cursor:
+                (
+                    guild_id,
+                    feature
+                )
+            )
 
-                data = await cursor.fetchone()
+            data = await cursor.fetchone()
 
-        return data if data else DEFAULTS[feature]
+            await cursor.close()
 
-    async def is_whitelisted(self, guild_id, user_id):
+        return data if data else DEFAULTS[
+            feature
+        ]
 
-        async with aiosqlite.connect(DB_PATH) as db:
+    async def is_whitelisted(
+        self,
+        guild_id,
+        user_id
+    ):
 
-            async with db.execute(
+        async with await get_db() as db:
+
+            cursor = await db.execute(
                 """
                 SELECT 1
                 FROM automod_whitelist
-                WHERE guild_id=? AND user_id=?
+                WHERE guild_id=?
+                AND user_id=?
                 """,
-                (guild_id, user_id)
-            ) as cursor:
+                (
+                    guild_id,
+                    user_id
+                )
+            )
 
-                return await cursor.fetchone() is not None
+            data = await cursor.fetchone()
 
-    async def add_warn(self, guild_id, user_id):
+            await cursor.close()
 
-        async with aiosqlite.connect(DB_PATH) as db:
+            return data is not None
 
-            async with db.execute(
+    async def add_warn(
+        self,
+        guild_id,
+        user_id
+    ):
+
+        async with await get_db() as db:
+
+            cursor = await db.execute(
                 """
                 SELECT warns
                 FROM automod_warns
-                WHERE guild_id=? AND user_id=?
+                WHERE guild_id=?
+                AND user_id=?
                 """,
-                (guild_id, user_id)
-            ) as cursor:
+                (
+                    guild_id,
+                    user_id
+                )
+            )
 
-                data = await cursor.fetchone()
+            data = await cursor.fetchone()
 
-            warns = (data[0] if data else 0) + 1
+            warns = (
+                data["warns"]
+                if data
+                else 0
+            ) + 1
+
+            await cursor.close()
 
             await db.execute(
                 """
-                INSERT OR REPLACE INTO automod_warns
-                VALUES(?,?,?)
+                INSERT OR REPLACE
+                INTO automod_warns
+                VALUES (?, ?, ?)
                 """,
-                (guild_id, user_id, warns)
+                (
+                    guild_id,
+                    user_id,
+                    warns
+                )
             )
 
             await db.commit()
@@ -252,11 +264,21 @@ class AdvancedAutomod(commands.Cog):
 
         try:
 
-            me = member.guild.me
+            me = (
+                member.guild.me
+                or
+                member.guild.get_member(
+                    self.bot.user.id
+                )
+            )
+
+            if not me:
+                return
 
             if (
+                member == member.guild.owner
+                or
                 member.top_role >= me.top_role
-                or member == member.guild.owner
             ):
                 return
 
@@ -270,30 +292,36 @@ class AdvancedAutomod(commands.Cog):
                 try:
 
                     await member.send(
-                        f"Warning\nReason: {reason}\nWarns: {warns}"
+                        f"Warning\n"
+                        f"Reason: {reason}\n"
+                        f"Warns: {warns}"
                     )
 
-                except:
+                except discord.HTTPException:
+
                     pass
 
             elif punishment == "timeout":
 
                 await member.timeout(
-
                     discord.utils.utcnow()
-                    + timedelta(minutes=10),
-
+                    + timedelta(
+                        minutes=10
+                    ),
                     reason=reason
-
                 )
 
             elif punishment == "kick":
 
-                await member.kick(reason=reason)
+                await member.kick(
+                    reason=reason
+                )
 
             elif punishment == "ban":
 
-                await member.ban(reason=reason)
+                await member.ban(
+                    reason=reason
+                )
 
             await dispatch_log(
 
@@ -308,7 +336,6 @@ class AdvancedAutomod(commands.Cog):
                 ),
 
                 user_id=member.id
-
             )
 
         except Exception as e:
@@ -316,7 +343,10 @@ class AdvancedAutomod(commands.Cog):
             print(e)
 
     @commands.Cog.listener()
-    async def on_message(self, message):
+    async def on_message(
+        self,
+        message
+    ):
 
         if not message.guild:
             return
@@ -333,8 +363,6 @@ class AdvancedAutomod(commands.Cog):
         ):
             return
 
-        content = message.content.lower()
-
         uid = message.author.id
 
         enabled, limit, punishment = await self.get_feature(
@@ -346,40 +374,107 @@ class AdvancedAutomod(commands.Cog):
 
             now = time.time()
 
-            self.spam_cache[uid].append(now)
+            self.spam_cache[
+                uid
+            ].append(now)
 
             while (
                 self.spam_cache[uid]
-                and now - self.spam_cache[uid][0] > 5
+                and
+                now - self.spam_cache[uid][0] > 5
             ):
 
-                self.spam_cache[uid].popleft()
+                self.spam_cache[
+                    uid
+                ].popleft()
 
-            if len(self.spam_cache[uid]) >= limit:
+            if len(
+                self.spam_cache[uid]
+            ) >= limit:
 
                 try:
+
                     await message.delete()
-                except:
+
+                except discord.HTTPException:
+
                     pass
 
                 await self.execute_punishment(
+
                     message.author,
+
                     punishment,
+
                     "Spam detected"
+
                 )
 
                 return
 
-        self.ghost_ping[message.id] = (
+        self.ghost_ping[
+            message.id
+        ] = (
 
             message.author.id,
 
-            [m.id for m in message.mentions]
+            [
+                m.id
+                for m in message.mentions
+            ]
 
         )
 
     @commands.Cog.listener()
-    async def on_message_delete(self, message):
+    async def on_message_delete(
+        self,
+        message
+    ):
 
         data = self.ghost_ping.pop(
             message.id,
+            None
+        )
+
+        if not data:
+            return
+
+        author_id, mentions = data
+
+        if not mentions:
+            return
+
+        member = message.guild.get_member(
+            author_id
+        )
+
+        if not member:
+            return
+
+        enabled, limit, punishment = await self.get_feature(
+
+            message.guild.id,
+
+            "ghostping"
+
+        )
+
+        if not enabled:
+            return
+
+        await self.execute_punishment(
+
+            member,
+
+            punishment,
+
+            "Ghost Ping Detected"
+
+        )
+
+
+async def setup(bot):
+
+    await bot.add_cog(
+        AdvancedAutomod(bot)
+    )
