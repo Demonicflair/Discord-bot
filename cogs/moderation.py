@@ -1,17 +1,14 @@
-import time
 import asyncio
 import discord
-import aiosqlite
 
 from datetime import timedelta
 from discord.ext import commands
 from discord import app_commands
 
-from utils.database import DB_PATH
 from utils.dispatch import dispatch_log
 
 
-MOD_COLOR = 0x2b2d31
+MOD_COLOR = 0x2B2D31
 SUCCESS = 0x57F287
 ERROR = 0xED4245
 WARNING = 0xFEE75C
@@ -36,14 +33,13 @@ class Moderation(commands.Cog):
         embed = discord.Embed(
             title=title,
             description=description,
-            color=color
+            color=color,
+            timestamp=discord.utils.utcnow()
         )
 
         embed.set_footer(
             text="Dem Moderation System"
         )
-
-        embed.timestamp = discord.utils.utcnow()
 
         return embed
 
@@ -58,20 +54,25 @@ class Moderation(commands.Cog):
     ):
 
         if moderator.id == target.id:
+
             return False
 
-        if target.guild.owner == target:
+        if target == target.guild.owner:
+
             return False
 
-        if moderator.guild.owner == moderator:
+        if moderator == moderator.guild.owner:
+
             return True
 
         bot_member = moderator.guild.me
 
         if target.top_role >= moderator.top_role:
+
             return False
 
         if bot_member and target.top_role >= bot_member.top_role:
+
             return False
 
         return True
@@ -106,7 +107,7 @@ class Moderation(commands.Cog):
 
             )
 
-        except discord.HTTPException:
+        except Exception:
 
             pass
 
@@ -114,8 +115,12 @@ class Moderation(commands.Cog):
     # KICK
     # ==================================================
 
-    @commands.hybrid_command(
-        name="kick"
+    @commands.hybrid_command(name="kick")
+
+    @commands.cooldown(
+        2,
+        10,
+        commands.BucketType.user
     )
 
     @commands.has_permissions(
@@ -154,7 +159,9 @@ class Moderation(commands.Cog):
         )
 
         await member.kick(
+
             reason=f"{ctx.author} | {reason}"
+
         )
 
         await ctx.send(
@@ -192,9 +199,7 @@ class Moderation(commands.Cog):
     # BAN
     # ==================================================
 
-    @commands.hybrid_command(
-        name="ban"
-    )
+    @commands.hybrid_command(name="ban")
 
     @commands.has_permissions(
         ban_members=True
@@ -213,7 +218,18 @@ class Moderation(commands.Cog):
             ctx.author,
             member
         ):
-            return
+
+            return await ctx.send(
+
+                embed=self.embed(
+
+                    description="❌ Cannot moderate this user.",
+
+                    color=ERROR
+
+                )
+
+            )
 
         await self.dm_user(
             member,
@@ -222,8 +238,13 @@ class Moderation(commands.Cog):
         )
 
         await member.ban(
+
             reason=reason,
-            delete_message_seconds=delete_days * 86400
+
+            delete_message_seconds=(
+                delete_days * 86400
+            )
+
         )
 
         await ctx.send(
@@ -232,7 +253,10 @@ class Moderation(commands.Cog):
 
                 title="🔨 Member Banned",
 
-                description=f"{member.mention}\nReason: {reason}",
+                description=(
+                    f"{member.mention}\n"
+                    f"Reason: {reason}"
+                ),
 
                 color=ERROR
 
@@ -246,7 +270,7 @@ class Moderation(commands.Cog):
 
             "ban",
 
-            content=f"{member} banned\nReason: {reason}",
+            content=f"{member} banned",
 
             user_id=member.id,
 
@@ -275,28 +299,21 @@ class Moderation(commands.Cog):
         reason="No reason provided"
     ):
 
+        if minutes <= 0:
+
+            return await ctx.send(
+                "Invalid duration."
+            )
+
         if not await self.can_moderate(
             ctx.author,
             member
         ):
+
             return
 
         await member.ban(
             reason=reason
-        )
-
-        await dispatch_log(
-
-            ctx.guild,
-
-            "ban",
-
-            content=f"{member} tempbanned ({minutes}m)",
-
-            user_id=member.id,
-
-            moderator_id=ctx.author.id
-
         )
 
         async def unban_later():
@@ -308,16 +325,18 @@ class Moderation(commands.Cog):
             try:
 
                 await ctx.guild.unban(
+
                     discord.Object(
                         id=member.id
                     )
+
                 )
 
-            except:
+            except Exception:
 
                 pass
 
-        self.bot.loop.create_task(
+        asyncio.create_task(
             unban_later()
         )
 
@@ -327,7 +346,10 @@ class Moderation(commands.Cog):
 
                 title="⏳ Tempban",
 
-                description=f"{member} banned for {minutes} minutes",
+                description=(
+                    f"{member.mention}\n"
+                    f"{minutes} minutes"
+                ),
 
                 color=ERROR
 
@@ -360,6 +382,7 @@ class Moderation(commands.Cog):
             ctx.author,
             member
         ):
+
             return
 
         await member.timeout(
@@ -374,27 +397,16 @@ class Moderation(commands.Cog):
 
         )
 
-        await dispatch_log(
-
-            ctx.guild,
-
-            "timeout",
-
-            content=f"{member} timeout {minutes}m",
-
-            user_id=member.id,
-
-            moderator_id=ctx.author.id
-
-        )
-
         await ctx.send(
 
             embed=self.embed(
 
                 title="🔇 Timeout",
 
-                description=f"{member.mention}\n{minutes} minutes"
+                description=(
+                    f"{member.mention}\n"
+                    f"{minutes} minutes"
+                )
 
             )
 
@@ -415,25 +427,18 @@ class Moderation(commands.Cog):
     async def untimeout(
         self,
         ctx,
-        member:discord.Member
+        member: discord.Member
     ):
+
+        if not await self.can_moderate(
+            ctx.author,
+            member
+        ):
+
+            return
 
         await member.timeout(
             None
-        )
-
-        await dispatch_log(
-
-            ctx.guild,
-
-            "untimeout",
-
-            content=f"{member} timeout removed",
-
-            user_id=member.id,
-
-            moderator_id=ctx.author.id
-
         )
 
         await ctx.send(
@@ -448,14 +453,9 @@ class Moderation(commands.Cog):
 
         )
 
-    # WARN / REMOVEWARN / WARNINGS / CLEAR / SOFTBAN / NICKNAME
-
-    # keep your original implementations,
-    # only replace DB_PATH imports and add can_moderate checks
-    # because logic itself is already fine.
 
 async def setup(bot):
 
     await bot.add_cog(
         Moderation(bot)
-        )
+    )
