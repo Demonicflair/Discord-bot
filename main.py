@@ -13,9 +13,10 @@ from utils.config import (
 
 from utils.database import initialize_db
 
-# =========================
+
+# ==================================================
 # LOGGING
-# =========================
+# ==================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,9 +26,9 @@ logging.basicConfig(
 logger = logging.getLogger("DemBot")
 
 
-# =========================
+# ==================================================
 # OPTIONAL VIEW IMPORTS
-# =========================
+# ==================================================
 
 TICKET_VIEWS = False
 GIVEAWAY_VIEW_EXISTS = False
@@ -44,7 +45,7 @@ try:
 except Exception:
 
     logger.exception(
-        "Ticket views failed importing"
+        "Failed importing ticket views"
     )
 
 try:
@@ -56,13 +57,13 @@ try:
 except Exception:
 
     logger.exception(
-        "Giveaway view failed importing"
+        "Failed importing giveaway view"
     )
 
 
-# =========================
-# BOT CLASS
-# =========================
+# ==================================================
+# BOT
+# ==================================================
 
 class DemBot(commands.Bot):
 
@@ -72,9 +73,8 @@ class DemBot(commands.Bot):
 
         intents.guilds = True
         intents.members = True
-        intents.message_content = True
         intents.messages = True
-        intents.guild_messages = True
+        intents.message_content = True
 
         super().__init__(
 
@@ -93,6 +93,7 @@ class DemBot(commands.Bot):
             allowed_mentions=discord.AllowedMentions(
                 everyone=False,
                 roles=False,
+                users=True,
                 replied_user=False
             ),
 
@@ -104,9 +105,9 @@ class DemBot(commands.Bot):
 
         self.start_time = discord.utils.utcnow()
 
-    # =========================
+    # ==================================================
     # SETUP
-    # =========================
+    # ==================================================
 
     async def setup_hook(self):
 
@@ -127,8 +128,7 @@ class DemBot(commands.Bot):
         except Exception:
 
             logger.exception(
-                "Database failed"
-
+                "Database initialization failed"
             )
 
             raise
@@ -147,10 +147,10 @@ class DemBot(commands.Bot):
             os.listdir(cog_folder)
         ):
 
-            if not file.endswith(".py"):
-                continue
-
-            if file.startswith("_"):
+            if (
+                not file.endswith(".py")
+                or file.startswith("_")
+            ):
                 continue
 
             cog = file[:-3]
@@ -164,7 +164,7 @@ class DemBot(commands.Bot):
                 loaded += 1
 
                 logger.info(
-                    f"Loaded {cog}"
+                    f"Loaded: {cog}"
                 )
 
             except Exception:
@@ -172,7 +172,7 @@ class DemBot(commands.Bot):
                 failed += 1
 
                 logger.error(
-                    f"Failed {cog}"
+                    f"Failed loading: {cog}"
                 )
 
                 traceback.print_exc()
@@ -204,12 +204,28 @@ class DemBot(commands.Bot):
         except Exception:
 
             logger.exception(
-                "Persistent views failed"
+                "Persistent view registration failed"
             )
 
-    # =========================
+        # SYNC COMMANDS
+
+        try:
+
+            synced = await self.tree.sync()
+
+            logger.info(
+                f"Synced {len(synced)} slash commands"
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Slash sync failed"
+            )
+
+    # ==================================================
     # READY
-    # =========================
+    # ==================================================
 
     async def on_ready(self):
 
@@ -227,12 +243,18 @@ class DemBot(commands.Bot):
         )
 
         logger.info(
-            f"Online as {self.user}"
+
+            f"Logged in as "
+
+            f"{self.user} "
+
+            f"({self.user.id})"
+
         )
 
-    # =========================
+    # ==================================================
     # MESSAGE
-    # =========================
+    # ==================================================
 
     async def on_message(
         self,
@@ -240,15 +262,16 @@ class DemBot(commands.Bot):
     ):
 
         if message.author.bot:
+
             return
 
         await self.process_commands(
             message
         )
 
-    # =========================
-    # GLOBAL PREFIX ERRORS
-    # =========================
+    # ==================================================
+    # PREFIX ERRORS
+    # ==================================================
 
     async def on_command_error(
         self,
@@ -260,6 +283,7 @@ class DemBot(commands.Bot):
             ctx.command,
             "on_error"
         ):
+
             return
 
         error = getattr(
@@ -272,6 +296,7 @@ class DemBot(commands.Bot):
             error,
             commands.CommandNotFound
         ):
+
             return
 
         logger.exception(
@@ -282,16 +307,20 @@ class DemBot(commands.Bot):
         try:
 
             await ctx.send(
+
                 "❌ Something went wrong.",
+
                 delete_after=10
+
             )
 
-        except:
+        except Exception:
+
             pass
 
-    # =========================
-    # GLOBAL SLASH ERRORS
-    # =========================
+    # ==================================================
+    # SLASH ERRORS
+    # ==================================================
 
     async def on_application_command_error(
         self,
@@ -300,7 +329,7 @@ class DemBot(commands.Bot):
     ):
 
         logger.exception(
-            "Slash Error",
+            "Application Command Error",
             exc_info=error
         )
 
@@ -309,31 +338,42 @@ class DemBot(commands.Bot):
             if interaction.response.is_done():
 
                 await interaction.followup.send(
-                    "❌ Error occurred.",
+
+                    "❌ Something went wrong.",
+
                     ephemeral=True
+
                 )
 
             else:
 
                 await interaction.response.send_message(
-                    "❌ Error occurred.",
+
+                    "❌ Something went wrong.",
+
                     ephemeral=True
+
                 )
 
-        except:
+        except Exception:
+
             pass
 
 
-# =========================
+# ==================================================
 # START
-# =========================
+# ==================================================
 
 bot = DemBot()
 
 if __name__ == "__main__":
 
     bot.run(
+
         TOKEN,
+
         reconnect=True,
+
         log_handler=None
-            )
+
+        )
