@@ -1,14 +1,13 @@
 import re
 import time
+import asyncio
 import datetime
 import discord
-import aiosqlite
 
 from discord.ext import commands, tasks
-from discord import app_commands
 
 from utils.dispatch import dispatch_log
-from utils.database import DB_PATH
+from utils.database import get_db
 from utils.config import (
     BRAND_COLOR,
     SCAM_PATTERN,
@@ -16,11 +15,8 @@ from utils.config import (
     ANTI_LINK
 )
 
-# =========================
-# SECURITY PATTERNS
-# =========================
-
 SCAM_PATTERNS = [
+
     r"free.*nitro",
     r"nitro.*free",
     r"steam.*gift",
@@ -30,16 +26,20 @@ SCAM_PATTERNS = [
     r"@everyone.*gift",
     r"cheap.*nitro",
     r"airdrop",
-    r"crypto.*reward"
+    r"crypto.*reward",
+    SCAM_PATTERN
 ]
 
-# Add config pattern too
-SCAM_PATTERNS.append(SCAM_PATTERN)
+COMPILED_SCAMS = [
 
+    re.compile(
+        pattern,
+        re.IGNORECASE
+    )
 
-# =========================
-# SECURITY AI SYSTEM
-# =========================
+    for pattern in SCAM_PATTERNS
+]
+
 
 class SecurityAI(commands.Cog):
 
@@ -47,40 +47,74 @@ class SecurityAI(commands.Cog):
 
         self.bot = bot
 
-        # Memory Heat Cache
         self.heat_levels = {}
 
-        # Spam Tracking
         self.message_cache = {}
 
-        # Auto cooldown cleaner
+        self.settings_cache = {}
+
         self.clean_heat.start()
 
+    def cog_unload(self):
+
+        self.clean_heat.cancel()
+
     # =========================
-    # DATABASE SETTING
+    # SETTINGS CACHE
     # =========================
 
     async def get_security_setting(
         self,
-        guild_id: int,
-        feature: str
+        guild_id,
+        feature
     ):
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        key = (
+            guild_id,
+            feature
+        )
 
-            async with db.execute(
+        if key in self.settings_cache:
+
+            return self.settings_cache[key]
+
+        async with await get_db() as db:
+
+            cursor = await db.execute(
+
                 """
                 SELECT enabled
                 FROM settings
-                WHERE guild_id=? AND feature=?
+                WHERE guild_id=?
+                AND feature=?
                 """,
-                (guild_id, feature)
-            ) as cursor:
 
-                data = await cursor.fetchone()
+                (
+                    guild_id,
+                    feature
+                )
 
-                # Default enabled
-                return True if data is None else bool(data[0])
+            )
+
+            row = await cursor.fetchone()
+
+            await cursor.close()
+
+        value = (
+
+            True
+
+            if row is None
+
+            else bool(
+                row["enabled"]
+            )
+
+        )
+
+        self.settings_cache[key] = value
+
+        return value
 
     # =========================
     # HEAT SYSTEM
@@ -88,528 +122,326 @@ class SecurityAI(commands.Cog):
 
     async def add_heat(
         self,
-        message: discord.Message,
-        amount: int,
-        reason: str
+        message,
+        amount,
+        reason
     ):
 
         if message.author.guild_permissions.manage_messages:
+
             return
 
         key = (
+
             message.guild.id,
+
             message.author.id
+
         )
 
-        current = self.heat_levels.get(key, 0)
+        current = self.heat_levels.get(
+            key,
+            0
+        )
 
         current += amount
 
         self.heat_levels[key] = current
 
-        # Save persistent score
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute("""
-                INSERT OR REPLACE INTO security_scores
-                (user_id, guild_id, score)
-                VALUES (?, ?, ?)
-            """, (
-                message.author.id,
-                message.guild.id,
-                current
-            ))
-
-            await db.commit()
-
-        # =========================
-        # WARNING
-        # =========================
-
-        if current >= 3 and current < 6:
-
-            try:
-
-                embed = discord.Embed(
-                    title="⚠️ Security Warning",
-                    description=(
-                        f"{message.author.mention} suspicious activity detected."
-                    ),
-                    color=discord.Color.orange()
-                )
-
-                embed.add_field(
-                    name="Reason",
-                    value=reason,
-                    inline=False
-                )
-
-                embed.add_field(
-                    name="Threat Level",
-                    value=f"{current}/10",
-                    inline=True
-                )
-
-                warn_msg = await message.channel.send(
-                    embed=embed
-                )
-
-                await asyncio.sleep(8)
-
-                await warn_msg.delete()
-
-            except:
-                pass
-
-        # =========================
-        # TIMEOUT
-        # =========================
-
-        elif current >= 6 and current < 10:
-
-            try:
-
-                await message.author.timeout(
-                    discord.utils.utcnow() + datetime.timedelta(hours=1),
-                    reason=f"Security AI: {reason}"
-                )
-
-                await dispatch_log(
-                    guild=message.guild,
-                    log_type="security",
-                    content=(
-                        f"🔇 User timed out automatically.\n"
-                        f"Reason: {reason}\n"
-                        f"Threat Level: {current}/10"
-                    ),
-                    user_id=message.author.id
-                )
-
-            except Exception as e:
-                print(f"[SECURITY TIMEOUT ERROR] {e}")
-
-        # =========================
-        # BAN
-        # =========================
-
-        elif current >= 10:
+        if current >= 10:
 
             try:
 
                 await message.author.ban(
+
                     reason=f"Security AI: {reason}"
+
                 )
 
                 await dispatch_log(
+
                     guild=message.guild,
+
                     log_type="security",
+
                     content=(
-                        f"⛔ User banned automatically.\n"
-                        f"Reason: {reason}\n"
-                        f"Threat Level: {current}/10"
+                        f"Auto Ban\n"
+                        f"Reason: {reason}"
                     ),
+
                     user_id=message.author.id
+
                 )
 
-                self.heat_levels[key] = 0
+                self.heat_levels.pop(
+                    key,
+                    None
+                )
 
-            except Exception as e:
-                print(f"[SECURITY BAN ERROR] {e}")
+            except Exception:
+
+                pass
+
+            return
+
+        if current >= 6:
+
+            try:
+
+                await message.author.timeout(
+
+                    discord.utils.utcnow()
+
+                    +
+
+                    datetime.timedelta(
+                        hours=1
+                    ),
+
+                    reason=reason
+
+                )
+
+            except Exception:
+
+                pass
+
+            return
+
+        if current >= 3:
+
+            try:
+
+                warn = await message.channel.send(
+
+                    embed=discord.Embed(
+
+                        title="⚠ Security Warning",
+
+                        description=(
+                            f"{message.author.mention}\n"
+                            f"{reason}"
+                        ),
+
+                        color=discord.Color.orange()
+
+                    )
+
+                )
+
+                await asyncio.sleep(
+                    8
+                )
+
+                await warn.delete()
+
+            except Exception:
+
+                pass
 
     # =========================
-    # AUTO CLEANER
+    # CLEANER
     # =========================
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(
+        minutes=30
+    )
+
     async def clean_heat(self):
 
-        remove = []
+        remove=[]
 
-        for key, value in self.heat_levels.items():
+        for k in list(
+            self.heat_levels
+        ):
 
-            value -= 1
+            self.heat_levels[k]-=1
 
-            if value <= 0:
-                remove.append(key)
+            if self.heat_levels[k] <=0:
 
-            else:
-                self.heat_levels[key] = value
+                remove.append(k)
 
-        for key in remove:
-            del self.heat_levels[key]
+        for k in remove:
+
+            self.heat_levels.pop(
+                k,
+                None
+            )
+
+        self.message_cache.clear()
 
     # =========================
     # MESSAGE SCAN
     # =========================
 
     @commands.Cog.listener()
-    async def on_message(self, message):
 
-        if not message.guild:
-            return
+    async def on_message(
+        self,
+        message
+    ):
 
-        if message.author.bot:
+        if (
+
+            not message.guild
+
+            or
+
+            message.author.bot
+
+        ):
+
             return
 
         content = message.content.lower()
 
-        # =========================
-        # BAD WORD FILTER
-        # =========================
+        # BAD WORDS
 
-        badword_enabled = await self.get_security_setting(
+        if await self.get_security_setting(
+
             message.guild.id,
-            "badword_filter"
-        )
 
-        if badword_enabled:
+            "badword_filter"
+
+        ):
 
             for word in BAD_WORDS:
 
                 if word.lower() in content:
 
-                    try:
-                        await message.delete()
-                    except:
-                        pass
-
-                    await self.add_heat(
-                        message,
-                        2,
-                        "Bad Language"
-                    )
-
-                    return
-
-        # =========================
-        # SCAM DETECTION
-        # =========================
-
-        scam_enabled = await self.get_security_setting(
-            message.guild.id,
-            "scam_protection"
-        )
-
-        if scam_enabled:
-
-            for pattern in SCAM_PATTERNS:
-
-                if re.search(pattern, content):
-
-                    try:
-                        await message.delete()
-                    except:
-                        pass
-
-                    await self.add_heat(
-                        message,
-                        5,
-                        "Scam Detection"
-                    )
-
-                    return
-
-        # =========================
-        # MASS MENTION
-        # =========================
-
-        mention_enabled = await self.get_security_setting(
-            message.guild.id,
-            "mention_protection"
-        )
-
-        if mention_enabled:
-
-            if len(message.mentions) >= 5:
-
-                try:
                     await message.delete()
-                except:
-                    pass
 
-                await self.add_heat(
-                    message,
-                    4,
-                    "Mass Mention Spam"
-                )
+                    await self.add_heat(
 
-                return
+                        message,
 
-        # =========================
-        # LINK FILTER
-        # =========================
+                        2,
 
-        anti_link_enabled = await self.get_security_setting(
+                        "Bad Language"
+
+                    )
+
+                    return
+
+        # SCAMS
+
+        if await self.get_security_setting(
+
             message.guild.id,
-            "anti_link"
-        )
 
-        if anti_link_enabled and ANTI_LINK:
+            "scam_protection"
 
-            if "http://" in content or "https://" in content:
+        ):
+
+            for pattern in COMPILED_SCAMS:
+
+                if pattern.search(
+                    content
+                ):
+
+                    await message.delete()
+
+                    await self.add_heat(
+
+                        message,
+
+                        5,
+
+                        "Scam"
+
+                    )
+
+                    return
+
+        # LINKS
+
+        if (
+
+            ANTI_LINK
+
+            and
+
+            await self.get_security_setting(
+
+                message.guild.id,
+
+                "anti_link"
+
+            )
+
+        ):
+
+            if (
+
+                "http://" in content
+
+                or
+
+                "https://" in content
+
+            ):
 
                 if not message.author.guild_permissions.manage_messages:
 
-                    try:
-                        await message.delete()
-                    except:
-                        pass
+                    await message.delete()
 
                     await self.add_heat(
+
                         message,
+
                         3,
-                        "Unauthorized Link"
+
+                        "Link"
+
                     )
 
                     return
 
-        # =========================
-        # MESSAGE SPAM
-        # =========================
+        # SPAM DETECTION
 
         key = (
+
             message.guild.id,
+
             message.author.id
+
         )
 
-        now = time.time()
+        now=time.time()
 
-        if key not in self.message_cache:
-            self.message_cache[key] = []
+        cache=self.message_cache.setdefault(
+            key,
+            []
+        )
 
-        self.message_cache[key].append(now)
+        cache.append(now)
 
-        # Keep last 5 seconds only
-        self.message_cache[key] = [
-            t for t in self.message_cache[key]
-            if now - t <= 5
+        cache[:] = [
+
+            t
+
+            for t in cache
+
+            if now-t <=5
+
         ]
 
-        # Spam Detection
-        if len(self.message_cache[key]) >= 7:
-
-            try:
-                await message.channel.purge(
-                    limit=7,
-                    check=lambda m: m.author.id == message.author.id
-                )
-            except:
-                pass
+        if len(cache)>=7:
 
             await self.add_heat(
+
                 message,
+
                 4,
-                "Message Spam"
+
+                "Spam"
+
             )
-
-    # =========================
-    # SECURITY GROUP
-    # =========================
-
-    @commands.hybrid_group(
-        name="security",
-        description="Manage Dem Security AI."
-    )
-    @commands.has_permissions(administrator=True)
-    async def security(self, ctx):
-
-        if ctx.invoked_subcommand is None:
-
-            embed = discord.Embed(
-                title="🛡️ Dem Security AI",
-                description=(
-                    "Advanced AI moderation and protection system.\n\n"
-                    "Available Commands:\n"
-                    "`/security status`\n"
-                    "`/security reset`\n"
-                    "`/security toggle`\n"
-                    "`/security settings`"
-                ),
-                color=BRAND_COLOR
-            )
-
-            await ctx.send(embed=embed)
-
-    # =========================
-    # STATUS
-    # =========================
-
-    @security.command(
-        name="status",
-        description="View user threat level."
-    )
-    async def security_status(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        heat = self.heat_levels.get(
-            (ctx.guild.id, member.id),
-            0
-        )
-
-        if heat < 3:
-            status = "🟢 Safe"
-
-        elif heat < 6:
-            status = "🟡 Warning"
-
-        else:
-            status = "🔴 Dangerous"
-
-        embed = discord.Embed(
-            title="🛡️ Security Profile",
-            color=BRAND_COLOR
-        )
-
-        embed.set_thumbnail(
-            url=member.display_avatar.url
-        )
-
-        embed.add_field(
-            name="User",
-            value=member.mention,
-            inline=True
-        )
-
-        embed.add_field(
-            name="Threat Level",
-            value=f"{heat}/10",
-            inline=True
-        )
-
-        embed.add_field(
-            name="Status",
-            value=status,
-            inline=True
-        )
-
-        await ctx.send(embed=embed)
-
-    # =========================
-    # RESET
-    # =========================
-
-    @security.command(
-        name="reset",
-        description="Reset security heat."
-    )
-    async def security_reset(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        self.heat_levels[
-            (ctx.guild.id, member.id)
-        ] = 0
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute("""
-                UPDATE security_scores
-                SET score=0
-                WHERE user_id=? AND guild_id=?
-            """, (
-                member.id,
-                ctx.guild.id
-            ))
-
-            await db.commit()
-
-        await ctx.send(
-            f"✅ Reset security heat for {member.mention}"
-        )
-
-    # =========================
-    # TOGGLE FEATURES
-    # =========================
-
-    @security.command(
-        name="toggle",
-        description="Enable or disable security features."
-    )
-    async def security_toggle(
-        self,
-        ctx,
-        feature: str,
-        state: bool
-    ):
-
-        valid = [
-            "scam_protection",
-            "mention_protection",
-            "anti_link",
-            "badword_filter"
-        ]
-
-        if feature not in valid:
-
-            return await ctx.send(
-                f"❌ Invalid feature.\n\nValid Features:\n`{'`, `'.join(valid)}`"
-            )
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute("""
-                INSERT OR REPLACE INTO settings
-                (guild_id, feature, enabled)
-                VALUES (?, ?, ?)
-            """, (
-                ctx.guild.id,
-                feature,
-                int(state)
-            ))
-
-            await db.commit()
-
-        await ctx.send(
-            f"✅ `{feature}` has been set to `{state}`"
-        )
-
-    # =========================
-    # SETTINGS VIEW
-    # =========================
-
-    @security.command(
-        name="settings",
-        description="View current security settings."
-    )
-    async def security_settings(self, ctx):
-
-        features = [
-            "scam_protection",
-            "mention_protection",
-            "anti_link",
-            "badword_filter"
-        ]
-
-        embed = discord.Embed(
-            title="⚙️ Security Settings",
-            color=BRAND_COLOR
-        )
-
-        for feature in features:
-
-            enabled = await self.get_security_setting(
-                ctx.guild.id,
-                feature
-            )
-
-            embed.add_field(
-                name=feature.replace("_", " ").title(),
-                value="🟢 Enabled" if enabled else "🔴 Disabled",
-                inline=True
-            )
-
-        await ctx.send(embed=embed)
-
-
-# =========================
-# LOAD COG
-# =========================
 
 async def setup(bot):
 
-    await bot.add_cog(SecurityAI(bot))
+    await bot.add_cog(
+
+        SecurityAI(bot)
+
+    )
