@@ -1,56 +1,73 @@
 import discord
+from typing import Optional, List, Dict, Any
 
 from utils.database import get_db
 from utils.config import BRAND_COLOR
 
-# =========================
+# ======================================
 # CACHE
-# =========================
+# ======================================
 
-_settings_cache = {}
+_settings_cache: dict = {}
 
+MOD_LOG_TYPES = {
+    "ban",
+    "unban",
+    "kick",
+    "warn",
+    "mute",
+    "unmute",
+    "timeout",
+    "untimeout",
+    "clear",
+    "lock",
+    "unlock"
+}
 
-# =========================
+# ======================================
 # GET LOG CHANNELS
-# =========================
+# ======================================
 
-async def get_logs(guild_id: int):
+async def get_logs(guild_id: int) -> Optional[dict]:
 
     async with await get_db() as db:
 
-        cursor = await db.execute(
+        async with db.execute(
             """
             SELECT mod_log, bot_log
             FROM log_channels
-            WHERE guild_id = ?
+            WHERE guild_id=?
             """,
             (guild_id,)
-        )
+        ) as cursor:
 
-        data = await cursor.fetchone()
+            row = await cursor.fetchone()
 
-        await cursor.close()
+    if not row:
+        return None
 
-        return data
+    return {
+        "mod_log": row["mod_log"],
+        "bot_log": row["bot_log"]
+    }
 
 
-# =========================
+# ======================================
 # SET LOG CHANNELS
-# =========================
+# ======================================
 
 async def set_log_channels(
     guild_id: int,
-    mod_log=None,
-    bot_log=None
+    mod_log: Optional[int] = None,
+    bot_log: Optional[int] = None
 ):
 
-    old = await get_logs(guild_id)
+    existing = await get_logs(guild_id)
 
-    old_mod = old["mod_log"] if old else None
-    old_bot = old["bot_log"] if old else None
+    if existing:
 
-    mod_log = old_mod if mod_log is None else mod_log
-    bot_log = old_bot if bot_log is None else bot_log
+        mod_log = existing["mod_log"] if mod_log is None else mod_log
+        bot_log = existing["bot_log"] if bot_log is None else bot_log
 
     async with await get_db() as db:
 
@@ -70,9 +87,9 @@ async def set_log_channels(
         await db.commit()
 
 
-# =========================
+# ======================================
 # SAVE LOG
-# =========================
+# ======================================
 
 async def save_log(
     guild_id: int,
@@ -80,7 +97,7 @@ async def save_log(
     log_type: str,
     content: str,
     moderator_id: int = 0
-):
+) -> int:
 
     async with await get_db() as db:
 
@@ -100,26 +117,22 @@ async def save_log(
                 guild_id,
                 user_id,
                 moderator_id,
-                log_type,
+                log_type.lower(),
                 content
             )
         )
 
         await db.commit()
 
-        case_id = cursor.lastrowid
-
-        await cursor.close()
-
-        return case_id
+        return cursor.lastrowid
 
 
-# =========================
+# ======================================
 # SEND LOG
-# =========================
+# ======================================
 
 async def send_log(
-    guild,
+    guild: discord.Guild,
     log_type: str,
     embed: discord.Embed
 ):
@@ -129,20 +142,11 @@ async def send_log(
     if not logs:
         return
 
-    mod_types = {
-        "ban",
-        "kick",
-        "warn",
-        "mute",
-        "unmute",
-        "clear"
-    }
-
     channel_id = (
 
         logs["mod_log"]
 
-        if log_type in mod_types
+        if log_type.lower() in MOD_LOG_TYPES
 
         else logs["bot_log"]
 
@@ -156,33 +160,41 @@ async def send_log(
     if not channel:
         return
 
+    me = guild.me
+
+    if not me:
+        return
+
+    perms = channel.permissions_for(me)
+
+    if not perms.send_messages:
+        return
+
     try:
 
-        await channel.send(
-            embed=embed
-        )
+        await channel.send(embed=embed)
 
-    except discord.Forbidden:
+    except (
+        discord.Forbidden,
+        discord.NotFound,
+        discord.HTTPException
+    ):
 
-        return
-
-    except discord.HTTPException:
-
-        return
+        pass
 
 
-# =========================
+# ======================================
 # LOG ENABLED
-# =========================
+# ======================================
 
 async def is_log_enabled(
     guild_id: int,
     log_type: str
-):
+) -> bool:
 
     key = (
         guild_id,
-        log_type
+        log_type.lower()
     )
 
     if key in _settings_cache:
@@ -191,47 +203,39 @@ async def is_log_enabled(
 
     async with await get_db() as db:
 
-        cursor = await db.execute(
+        async with db.execute(
             """
             SELECT enabled
             FROM log_settings
             WHERE guild_id=?
             AND log_type=?
             """,
-            (
-                guild_id,
-                log_type
-            )
-        )
+            key
+        ) as cursor:
 
-        data = await cursor.fetchone()
+            data = await cursor.fetchone()
 
-        await cursor.close()
-
-    enabled = (
-
-        True
-
-        if data is None
-
-        else bool(data["enabled"])
-
-    )
+    enabled = True if data is None else bool(data["enabled"])
 
     _settings_cache[key] = enabled
 
     return enabled
 
 
-# =========================
+# ======================================
 # SET LOG STATE
-# =========================
+# ======================================
 
 async def set_log_state(
     guild_id: int,
     log_type: str,
     state: bool
 ):
+
+    key = (
+        guild_id,
+        log_type.lower()
+    )
 
     async with await get_db() as db:
 
@@ -247,24 +251,19 @@ async def set_log_state(
             """,
             (
                 guild_id,
-                log_type,
+                log_type.lower(),
                 int(state)
             )
         )
 
         await db.commit()
 
-    _settings_cache[
-        (
-            guild_id,
-            log_type
-        )
-    ] = state
+    _settings_cache[key] = state
 
 
-# =========================
+# ======================================
 # USER HISTORY
-# =========================
+# ======================================
 
 async def get_user_history(
     guild_id: int,
@@ -274,7 +273,7 @@ async def get_user_history(
 
     async with await get_db() as db:
 
-        cursor = await db.execute(
+        async with db.execute(
             """
             SELECT *
             FROM logs_data
@@ -288,48 +287,36 @@ async def get_user_history(
                 user_id,
                 limit
             )
-        )
+        ) as cursor:
 
-        rows = await cursor.fetchall()
-
-        await cursor.close()
-
-        return rows
+            return await cursor.fetchall()
 
 
-# =========================
+# ======================================
 # GET CASE
-# =========================
+# ======================================
 
-async def get_case(
-    case_id: int
-):
+async def get_case(case_id: int):
 
     async with await get_db() as db:
 
-        cursor = await db.execute(
+        async with db.execute(
             """
             SELECT *
             FROM logs_data
             WHERE case_id=?
             """,
             (case_id,)
-        )
+        ) as cursor:
 
-        row = await cursor.fetchone()
-
-        await cursor.close()
-
-        return row
+            return await cursor.fetchone()
 
 
-# =========================
+# ======================================
 # DELETE CASE
-# =========================
+# ======================================
 
-async def delete_case(
-    case_id: int
-):
+async def delete_case(case_id: int):
 
     async with await get_db() as db:
 
@@ -344,17 +331,20 @@ async def delete_case(
         await db.commit()
 
 
-# =========================
+# ======================================
 # EMBEDS
-# =========================
+# ======================================
 
-def build_case_embed(
-    case_data
-):
+def build_case_embed(case_data):
 
     if not case_data:
-
         return None
+
+    content = case_data["content"] or "No details."
+
+    if len(content) > 1000:
+
+        content = content[:997] + "..."
 
     embed = discord.Embed(
 
@@ -366,6 +356,7 @@ def build_case_embed(
         ),
 
         color=BRAND_COLOR
+
     )
 
     embed.add_field(
@@ -378,6 +369,7 @@ def build_case_embed(
         ),
 
         inline=True
+
     )
 
     if case_data["moderator_id"]:
@@ -392,28 +384,22 @@ def build_case_embed(
             ),
 
             inline=True
-        )
 
-    content = case_data["content"]
+        )
 
     embed.add_field(
 
         name="Details",
 
-        value=(
-            content[:1000] + "..."
-
-            if len(content) > 1000
-
-            else content
-        ),
+        value=content,
 
         inline=False
+
     )
 
     embed.set_footer(
 
-        text=f"{case_data['timestamp']}"
+        text=str(case_data["timestamp"])
 
     )
 
@@ -421,8 +407,8 @@ def build_case_embed(
 
 
 def quick_embed(
-    title,
-    description,
+    title: str,
+    description: str,
     color=BRAND_COLOR
 ):
 
@@ -433,4 +419,5 @@ def quick_embed(
         description=description,
 
         color=color
+
     )
