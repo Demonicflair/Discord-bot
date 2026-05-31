@@ -1,9 +1,12 @@
 import discord
-from datetime import datetime
 
-# =========================
+from datetime import datetime
+from typing import Optional
+
+
+# ==================================================
 # COLORS
-# =========================
+# ==================================================
 
 DEM_COLOR = 0x2B2D31
 
@@ -12,32 +15,33 @@ ERROR_COLOR = 0xED4245
 WARNING_COLOR = 0xFEE75C
 INFO_COLOR = 0x5865F2
 
-MOD_COLOR = 0x2B2D31
-TICKET_COLOR = 0x2B2D31
+MOD_COLOR = DEM_COLOR
+TICKET_COLOR = DEM_COLOR
 LOG_COLOR = 0x313338
-
-# =========================
-# FOOTER
-# =========================
 
 DEFAULT_FOOTER = "Dem System"
 
 
-# =========================
+# ==================================================
 # BASE EMBED
-# =========================
+# ==================================================
 
 def base_embed(
-    title: str = None,
-    description: str = None,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
     color: int = DEM_COLOR
 ):
 
     embed = discord.Embed(
+
         title=title,
+
         description=description,
+
         color=color,
+
         timestamp=datetime.utcnow()
+
     )
 
     embed.set_footer(
@@ -47,81 +51,61 @@ def base_embed(
     return embed
 
 
-# =========================
-# SUCCESS EMBED
-# =========================
+# ==================================================
+# SIMPLE EMBEDS
+# ==================================================
 
 def success_embed(
     description: str,
     title: str = "✅ Success"
 ):
 
-    embed = base_embed(
+    return base_embed(
         title=title,
         description=description,
         color=SUCCESS_COLOR
     )
 
-    return embed
-
-
-# =========================
-# ERROR EMBED
-# =========================
 
 def error_embed(
     description: str,
     title: str = "❌ Error"
 ):
 
-    embed = base_embed(
+    return base_embed(
         title=title,
         description=description,
         color=ERROR_COLOR
     )
 
-    return embed
-
-
-# =========================
-# WARNING EMBED
-# =========================
 
 def warning_embed(
     description: str,
     title: str = "⚠️ Warning"
 ):
 
-    embed = base_embed(
+    return base_embed(
         title=title,
         description=description,
         color=WARNING_COLOR
     )
 
-    return embed
-
-
-# =========================
-# INFO EMBED
-# =========================
 
 def info_embed(
     description: str,
     title: str = "ℹ️ Information"
 ):
 
-    embed = base_embed(
+    return base_embed(
         title=title,
         description=description,
         color=INFO_COLOR
     )
 
-    return embed
 
-
-# =========================
-# MODERATION EMBED
-# =========================
+# ==================================================
+# MODERATION
+# ==================================================
 
 def moderation_embed(
     action: str,
@@ -132,40 +116,61 @@ def moderation_embed(
 ):
 
     embed = base_embed(
+
         title=f"🛡️ Moderation • {action}",
+
         color=color
+
     )
 
     embed.add_field(
+
         name="Moderator",
+
         value=f"{moderator.mention}\n`{moderator.id}`",
+
         inline=True
+
     )
 
     embed.add_field(
+
         name="Target",
+
         value=f"{target.mention}\n`{target.id}`",
+
         inline=True
+
     )
 
     embed.add_field(
+
         name="Reason",
-        value=reason,
+
+        value=reason[:1024],
+
         inline=False
+
     )
 
-    if hasattr(target, "display_avatar"):
+    if getattr(
+        target,
+        "display_avatar",
+        None
+    ):
 
         embed.set_thumbnail(
+
             url=target.display_avatar.url
+
         )
 
     return embed
 
 
-# =========================
-# TICKET EMBED
-# =========================
+# ==================================================
+# TICKETS
+# ==================================================
 
 def ticket_embed(
     user,
@@ -173,35 +178,45 @@ def ticket_embed(
 ):
 
     embed = base_embed(
+
         title="🎫 Support Ticket",
-        description=(
-            description
-            or
-            (
-                f"Welcome {user.mention}\n\n"
-                "Please explain your issue.\n"
-                "A staff member will assist you shortly."
-            )
+
+        description=description or (
+
+            f"Welcome {user.mention}\n\n"
+
+            "Please explain your issue.\n"
+
+            "A staff member will assist shortly."
+
         ),
+
         color=TICKET_COLOR
+
     )
 
     embed.add_field(
+
         name="Ticket Owner",
-        value=f"{user.mention}",
+
+        value=user.mention,
+
         inline=False
+
     )
 
     embed.set_thumbnail(
+
         url=user.display_avatar.url
+
     )
 
     return embed
 
 
-# =========================
-# LOG EMBED
-# =========================
+# ==================================================
+# LOGS
+# ==================================================
 
 def log_embed(
     title: str,
@@ -209,137 +224,218 @@ def log_embed(
     color: int = LOG_COLOR
 ):
 
-    embed = base_embed(
+    return base_embed(
+
         title=title,
+
         description=description,
+
         color=color
+
     )
 
-    return embed
 
+# ==================================================
+# USER INFO
+# ==================================================
 
-# =========================
-# USER INFO EMBED
-# =========================
-
-def user_info_embed(member: discord.Member):
+def user_info_embed(
+    member: discord.Member
+):
 
     embed = base_embed(
         color=member.color
     )
 
     embed.set_author(
-        name=f"{member}",
+
+        name=str(member),
+
         icon_url=member.display_avatar.url
+
     )
 
     embed.set_thumbnail(
+
         url=member.display_avatar.url
+
     )
 
     embed.add_field(
+
         name="🆔 User ID",
-        value=f"`{member.id}`",
-        inline=True
+
+        value=f"`{member.id}`"
+
     )
 
     embed.add_field(
+
         name="📅 Created",
-        value=f"<t:{int(member.created_at.timestamp())}:R>",
-        inline=True
+
+        value=f"<t:{int(member.created_at.timestamp())}:R>"
+
+    )
+
+    joined = (
+
+        f"<t:{int(member.joined_at.timestamp())}:R>"
+
+        if member.joined_at
+
+        else "Unknown"
+
     )
 
     embed.add_field(
+
         name="📥 Joined",
-        value=f"<t:{int(member.joined_at.timestamp())}:R>",
-        inline=True
+
+        value=joined
+
     )
 
     embed.add_field(
+
         name="🛡️ Top Role",
-        value=member.top_role.mention,
-        inline=True
+
+        value=member.top_role.mention
+
     )
 
     embed.add_field(
+
         name="🤖 Bot",
-        value="Yes" if member.bot else "No",
-        inline=True
+
+        value="Yes" if member.bot else "No"
+
     )
 
-    roles = [r.mention for r in member.roles[1:]]
+    roles = [
+
+        r.mention
+
+        for r in member.roles[1:]
+
+    ]
 
     embed.add_field(
+
         name=f"🎭 Roles [{len(roles)}]",
-        value=" ".join(roles[:10]) if roles else "None",
+
+        value=(
+
+            " ".join(
+
+                roles[:15]
+
+            )
+
+            if roles
+
+            else "None"
+
+        ),
+
         inline=False
+
     )
 
     return embed
 
 
-# =========================
-# SERVER INFO EMBED
-# =========================
+# ==================================================
+# SERVER INFO
+# ==================================================
 
-def server_info_embed(guild: discord.Guild):
+def server_info_embed(
+    guild: discord.Guild
+):
 
     embed = base_embed(
+
         title=f"🌍 {guild.name}",
+
         color=DEM_COLOR
+
     )
 
     if guild.icon:
 
         embed.set_thumbnail(
+
             url=guild.icon.url
+
         )
 
     embed.add_field(
+
         name="👑 Owner",
-        value=f"{guild.owner}",
-        inline=True
+
+        value=str(guild.owner)
+
     )
 
     embed.add_field(
+
         name="👥 Members",
-        value=f"`{guild.member_count}`",
-        inline=True
+
+        value=str(guild.member_count)
+
     )
 
     embed.add_field(
+
         name="📅 Created",
-        value=f"<t:{int(guild.created_at.timestamp())}:D>",
-        inline=True
+
+        value=f"<t:{int(guild.created_at.timestamp())}:D>"
+
     )
 
     embed.add_field(
+
         name="💬 Channels",
+
         value=(
-            f"Text: `{len(guild.text_channels)}`\n"
-            f"Voice: `{len(guild.voice_channels)}`"
-        ),
-        inline=True
+
+            f"Text: {len(guild.text_channels)}\n"
+
+            f"Voice: {len(guild.voice_channels)}"
+
+        )
+
     )
 
     embed.add_field(
+
         name="🎭 Roles",
-        value=f"`{len(guild.roles)}`",
-        inline=True
+
+        value=str(
+
+            len(guild.roles)
+
+        )
+
     )
 
     embed.add_field(
+
         name="😀 Emojis",
-        value=f"`{len(guild.emojis)}`",
-        inline=True
+
+        value=str(
+
+            len(guild.emojis)
+
+        )
+
     )
 
     return embed
 
 
-# =========================
-# PING EMBED
-# =========================
+# ==================================================
+# PING
+# ==================================================
 
 def ping_embed(
     gateway: int,
@@ -359,22 +455,29 @@ def ping_embed(
         status = "🔴 High Latency"
 
     embed = base_embed(
+
         title="🏓 Pong",
+
         color=INFO_COLOR
+
     )
 
     embed.description = (
-        f"**Gateway:** `{gateway}ms`\n"
-        f"**Rest API:** `{rest}ms`\n"
-        f"**Status:** {status}"
+
+        f"Gateway: `{gateway}ms`\n"
+
+        f"REST: `{rest}ms`\n"
+
+        f"Status: {status}"
+
     )
 
     return embed
 
 
-# =========================
-# ECONOMY EMBED
-# =========================
+# ==================================================
+# ECONOMY
+# ==================================================
 
 def economy_embed(
     user,
@@ -383,32 +486,41 @@ def economy_embed(
 ):
 
     embed = base_embed(
+
         title=f"💰 {user.name}'s Balance",
+
         color=SUCCESS_COLOR
+
     )
 
     embed.add_field(
+
         name="Wallet",
-        value=f"💵 `{balance:,}`",
-        inline=True
+
+        value=f"`{balance:,}`"
+
     )
 
     embed.add_field(
+
         name="Bank",
-        value=f"🏦 `{bank:,}`",
-        inline=True
+
+        value=f"`{bank:,}`"
+
     )
 
     embed.set_thumbnail(
+
         url=user.display_avatar.url
+
     )
 
     return embed
 
 
-# =========================
-# LEVEL EMBED
-# =========================
+# ==================================================
+# LEVEL
+# ==================================================
 
 def level_embed(
     user,
@@ -418,22 +530,33 @@ def level_embed(
 ):
 
     embed = base_embed(
+
         title="⭐ Level Up",
+
         description=(
+
             f"{user.mention} reached "
+
             f"Level **{level}**"
+
         ),
+
         color=INFO_COLOR
+
     )
 
     embed.add_field(
+
         name="XP",
-        value=f"`{xp}/{required}`",
-        inline=True
+
+        value=f"`{xp}/{required}`"
+
     )
 
     embed.set_thumbnail(
+
         url=user.display_avatar.url
+
     )
 
     return embed
