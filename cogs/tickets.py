@@ -1,801 +1,533 @@
+# cogs/tickets.py
+
 import io
 import asyncio
-import aiosqlite
 import discord
 
 from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
 
-from utils.dispatch import dispatch_log
-from utils.config import STAFF_ROLE_NAME
+from utils.database import (
+    get_db,
+    DB_PATH
+)
 
-DB_PATH = "data.db"
+from utils.dispatch import dispatch_log
+from utils.embeds import (
+    success_embed,
+    error_embed,
+    base_embed
+)
+
 
 TICKET_COLOR = 0x2b2d31
 
 
-# =========================
+# ====================================
 # HELPERS
-# =========================
+# ====================================
 
-async def get_ticket_settings(guild_id: int):
+async def get_ticket_settings(guild_id):
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
 
-        async with db.execute(
-            """
-            SELECT
-            category_id,
-            log_channel,
-            panel_channel,
-            support_role
-            FROM ticket_settings
-            WHERE guild_id = ?
-            """,
-            (guild_id,)
-        ) as cursor:
+    async with db.execute("""
 
-            return await cursor.fetchone()
+    SELECT
+    category_id,
+    log_channel,
+    panel_channel,
+    support_role
 
+    FROM ticket_settings
 
-async def get_open_ticket(guild_id: int, user_id: int):
+    WHERE guild_id=?
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    """,(guild_id,)) as cursor:
 
-        async with db.execute(
-            """
-            SELECT channel_id
-            FROM active_tickets
-            WHERE guild_id = ? AND user_id = ?
-            """,
-            (guild_id, user_id)
-        ) as cursor:
+        data = await cursor.fetchone()
 
-            return await cursor.fetchone()
+    await db.close()
+
+    return data
 
 
-async def is_blacklisted(guild_id: int, user_id: int):
+async def get_open_ticket(
+    guild_id,
+    user_id
+):
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    db = await get_db()
 
-        async with db.execute(
-            """
-            SELECT *
-            FROM ticket_blacklist
-            WHERE guild_id = ? AND user_id = ?
-            """,
-            (guild_id, user_id)
-        ) as cursor:
+    async with db.execute("""
 
-            return await cursor.fetchone()
+    SELECT channel_id
+
+    FROM active_tickets
+
+    WHERE guild_id=?
+    AND user_id=?
+
+    """,(guild_id,user_id)) as cursor:
+
+        data = await cursor.fetchone()
+
+    await db.close()
+
+    return data
 
 
-async def save_ticket(channel_id, guild_id, user_id):
+async def build_transcript(channel):
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    lines=[]
 
-        await db.execute(
-            """
-            INSERT OR REPLACE INTO active_tickets
-            (
-                channel_id,
-                guild_id,
-                user_id,
-                created_at
-            )
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                channel_id,
-                guild_id,
-                user_id,
-                int(datetime.utcnow().timestamp())
-            )
+    async for msg in channel.history(
+        oldest_first=True,
+        limit=None
+    ):
+
+        content=msg.content
+
+        if not content:
+
+            if msg.attachments:
+
+                content="[Attachment]"
+
+            elif msg.embeds:
+
+                content="[Embed]"
+
+            else:
+
+                content="[Empty]"
+
+        lines.append(
+
+            f"[{msg.created_at}] "
+
+            f"{msg.author}: "
+
+            f"{content}"
+
         )
 
-        await db.commit()
+    text="\n".join(lines)
+
+    return io.BytesIO(
+        text.encode()
+    )
 
 
-async def remove_ticket(channel_id):
-
-    async with aiosqlite.connect(DB_PATH) as db:
-
-        await db.execute(
-            """
-            DELETE FROM active_tickets
-            WHERE channel_id = ?
-            """,
-            (channel_id,)
-        )
-
-        await db.commit()
-
-
-# =========================
-# TRANSCRIPT
-# =========================
-
-async def build_transcript(channel: discord.TextChannel):
-
-    messages = []
-
-    async for message in channel.history(limit=None, oldest_first=True):
-
-        timestamp = message.created_at.strftime("%Y-%m-%d %H:%M")
-
-        content = (
-            message.content
-            if message.content
-            else "[Embed/Attachment]"
-        )
-
-        messages.append(
-            f"[{timestamp}] {message.author} : {content}"
-        )
-
-    transcript = "\n".join(messages)
-
-    return io.BytesIO(transcript.encode()), f"{channel.name}.txt"
-
-
-# =========================
-# OPEN TICKET VIEW
-# =========================
+# ====================================
+# TICKET VIEW
+# ====================================
 
 class TicketView(discord.ui.View):
 
     def __init__(self):
-        super().__init__(timeout=None)
+
+        super().__init__(
+            timeout=None
+        )
 
     @discord.ui.button(
         label="Open Ticket",
         emoji="🎫",
-        style=discord.ButtonStyle.blurple,
-        custom_id="dem_ticket_open"
+        custom_id="dem_ticket_open",
+        style=discord.ButtonStyle.blurple
     )
+
     async def open_ticket(
+
         self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
+        interaction,
+        button
+
     ):
 
-        guild = interaction.guild
-        user = interaction.user
+        guild=interaction.guild
+        user=interaction.user
 
-        # =========================
-        # BLACKLIST
-        # =========================
-
-        blacklisted = await is_blacklisted(
-            guild.id,
-            user.id
-        )
-
-        if blacklisted:
-
-            return await interaction.response.send_message(
-                "❌ You are blacklisted from tickets.",
-                ephemeral=True
-            )
-
-        # =========================
-        # DUPLICATE CHECK
-        # =========================
-
-        existing = await get_open_ticket(
+        existing=await get_open_ticket(
             guild.id,
             user.id
         )
 
         if existing:
 
-            channel = guild.get_channel(existing[0])
+            ch=guild.get_channel(
+                existing[0]
+            )
 
-            if channel:
+            if ch:
 
                 return await interaction.response.send_message(
-                    f"❌ You already have an open ticket: {channel.mention}",
+
+                    f"You already have {ch.mention}",
+
                     ephemeral=True
+
                 )
 
-        # =========================
-        # SETTINGS
-        # =========================
-
-        settings = await get_ticket_settings(
+        settings=await get_ticket_settings(
             guild.id
         )
 
         if not settings:
 
             return await interaction.response.send_message(
-                "❌ Ticket system is not setup.",
+
+                "Ticket system not configured.",
+
                 ephemeral=True
+
             )
 
-        (
-            category_id,
-            log_channel_id,
-            panel_channel,
-            support_role_id
-        ) = settings
+        category_id,log_channel,panel,support_role=settings
 
-        category = guild.get_channel(category_id)
-
-        support_role = guild.get_role(
-            support_role_id
-        )
-
-        # =========================
-        # OVERWRITES
-        # =========================
-
-        overwrites = {
+        overwrites={
 
             guild.default_role:
-                discord.PermissionOverwrite(
-                    view_channel=False
-                ),
+            discord.PermissionOverwrite(
+                view_channel=False
+            ),
 
             user:
-                discord.PermissionOverwrite(
-                    view_channel=True,
-                    send_messages=True,
-                    attach_files=True,
-                    read_message_history=True
-                ),
+            discord.PermissionOverwrite(
+
+                view_channel=True,
+
+                send_messages=True,
+
+                read_message_history=True
+
+            ),
 
             guild.me:
-                discord.PermissionOverwrite(
-                    view_channel=True,
-                    send_messages=True,
-                    manage_channels=True,
-                    manage_messages=True
-                )
-        }
+            discord.PermissionOverwrite(
 
-        if support_role:
+                view_channel=True,
 
-            overwrites[support_role] = (
-                discord.PermissionOverwrite(
-                    view_channel=True,
-                    send_messages=True,
-                    read_message_history=True
-                )
+                manage_channels=True
+
             )
 
-        # =========================
-        # TICKET COUNT
-        # =========================
+        }
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        role=guild.get_role(
+            support_role
+        )
 
-            async with db.execute(
-                """
-                SELECT count
-                FROM ticket_counter
-                WHERE guild_id = ?
-                """,
-                (guild.id,)
-            ) as cursor:
+        if role:
 
-                data = await cursor.fetchone()
+            overwrites[role]=discord.PermissionOverwrite(
 
-            if not data:
+                view_channel=True,
 
-                count = 1
+                send_messages=True
 
-                await db.execute(
-                    """
-                    INSERT INTO ticket_counter
-                    (guild_id, count)
-                    VALUES (?, ?)
-                    """,
-                    (guild.id, count)
-                )
+            )
 
-            else:
+        channel=await guild.create_text_channel(
 
-                count = data[0] + 1
+            name=f"ticket-{user.name}",
 
-                await db.execute(
-                    """
-                    UPDATE ticket_counter
-                    SET count = ?
-                    WHERE guild_id = ?
-                    """,
-                    (count, guild.id)
-                )
-
-            await db.commit()
-
-        # =========================
-        # CREATE CHANNEL
-        # =========================
-
-        channel = await guild.create_text_channel(
-            name=f"ticket-{count}",
-            category=category,
             overwrites=overwrites,
-            topic=f"Ticket Owner: {user.id}"
+
+            category=guild.get_channel(
+                category_id
+            )
+
         )
 
-        # =========================
-        # SAVE DATABASE
-        # =========================
+        db=await get_db()
 
-        await save_ticket(
+        await db.execute("""
+
+        INSERT OR REPLACE INTO active_tickets
+
+        VALUES(?,?,?,?)
+
+        """,(
+
             channel.id,
+
             guild.id,
-            user.id
-        )
 
-        # =========================
-        # EMBED
-        # =========================
+            user.id,
 
-        embed = discord.Embed(
-            title="🎫 Support Ticket",
+            int(datetime.utcnow().timestamp())
+
+        ))
+
+        await db.commit()
+
+        await db.close()
+
+        embed=base_embed(
+
+            title="Ticket Created",
+
             description=(
-                f"Welcome {user.mention}\n\n"
-                "Please explain your issue.\n"
-                "Staff will assist you shortly."
-            ),
-            color=TICKET_COLOR
-        )
+                f"{user.mention}\n"
+                "Describe your issue."
+            )
 
-        embed.add_field(
-            name="Ticket Owner",
-            value=user.mention
-        )
-
-        embed.set_footer(
-            text="Dem Ticket System"
         )
 
         await channel.send(
-            content=(
-                f"{user.mention} "
-                f"{support_role.mention if support_role else ''}"
-            ),
-            embed=embed,
-            view=TicketControls()
-        )
 
-        # =========================
-        # RESPONSE
-        # =========================
+            embed=embed,
+
+            view=TicketControls()
+
+        )
 
         await interaction.response.send_message(
-            f"✅ Created ticket: {channel.mention}",
+
+            f"Created {channel.mention}",
+
             ephemeral=True
+
         )
 
-        # =========================
-        # LOGGING
-        # =========================
-
-        await dispatch_log(
-            guild,
-            "ticket_create",
-            (
-                f"🎫 Ticket Created\n"
-                f"User: {user} ({user.id})\n"
-                f"Channel: {channel.mention}"
-            ),
-            user_id=user.id
-        )
-
-
-# =========================
-# TICKET CONTROLS
-# =========================
 
 class TicketControls(discord.ui.View):
 
     def __init__(self):
-        super().__init__(timeout=None)
 
-    # =========================
-    # CLOSE
-    # =========================
-
-    @discord.ui.button(
-        label="Close",
-        emoji="🔒",
-        style=discord.ButtonStyle.red,
-        custom_id="ticket_close"
-    )
-    async def close_ticket(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        await interaction.response.send_message(
-            "🔒 Closing ticket..."
+        super().__init__(
+            timeout=None
         )
 
-        channel = interaction.channel
+    @discord.ui.button(
 
-        # =========================
-        # TRANSCRIPT
-        # =========================
+        label="Close",
 
-        file_data, filename = await build_transcript(
+        style=discord.ButtonStyle.red,
+
+        custom_id="ticket_close"
+
+    )
+
+    async def close(
+
+        self,
+        interaction,
+        button
+
+    ):
+
+        await interaction.response.defer()
+
+        channel=interaction.channel
+
+        transcript=await build_transcript(
             channel
         )
 
-        transcript = discord.File(
-            file_data,
-            filename=filename
+        file=discord.File(
+
+            transcript,
+
+            filename=f"{channel.name}.txt"
+
         )
 
-        # =========================
-        # LOG CHANNEL
-        # =========================
-
-        settings = await get_ticket_settings(
+        settings=await get_ticket_settings(
             interaction.guild.id
         )
 
         if settings:
 
-            log_channel_id = settings[1]
-
-            log_channel = interaction.guild.get_channel(
-                log_channel_id
+            log=interaction.guild.get_channel(
+                settings[1]
             )
 
-            if log_channel:
+            if log:
 
-                await log_channel.send(
-                    content=(
-                        f"📁 Transcript for {channel.name}"
-                    ),
-                    file=transcript
+                await log.send(
+
+                    file=file,
+
+                    content=f"Transcript {channel.name}"
+
                 )
 
-        # =========================
-        # REMOVE DATABASE
-        # =========================
+        db=await get_db()
 
-        await remove_ticket(channel.id)
+        await db.execute("""
 
-        # =========================
-        # LOGGING
-        # =========================
+        DELETE FROM active_tickets
+
+        WHERE channel_id=?
+
+        """,(channel.id,))
+
+        await db.commit()
+
+        await db.close()
 
         await dispatch_log(
+
             interaction.guild,
+
             "ticket_close",
-            (
-                f"🔒 Ticket Closed\n"
-                f"Channel: {channel.name}\n"
-                f"Closed By: {interaction.user}"
-            ),
+
+            content=f"{channel.name} closed",
+
             user_id=interaction.user.id
+
         )
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
         await channel.delete()
 
-    # =========================
-    # CLAIM
-    # =========================
 
-    @discord.ui.button(
-        label="Claim",
-        emoji="🛠️",
-        style=discord.ButtonStyle.green,
-        custom_id="ticket_claim"
-    )
-    async def claim_ticket(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        await interaction.response.send_message(
-            f"🛠️ {interaction.user.mention} claimed this ticket."
-        )
-
-    # =========================
-    # TRANSCRIPT BUTTON
-    # =========================
-
-    @discord.ui.button(
-        label="Transcript",
-        emoji="📄",
-        style=discord.ButtonStyle.gray,
-        custom_id="ticket_transcript"
-    )
-    async def transcript_button(
-        self,
-        interaction: discord.Interaction,
-        button: discord.ui.Button
-    ):
-
-        file_data, filename = await build_transcript(
-            interaction.channel
-        )
-
-        file = discord.File(
-            file_data,
-            filename=filename
-        )
-
-        await interaction.response.send_message(
-            file=file,
-            ephemeral=True
-        )
-
-
-# =========================
-# TICKET COG
-# =========================
+# ====================================
+# COG
+# ====================================
 
 class Tickets(commands.Cog):
 
-    def __init__(self, bot):
-        self.bot = bot
+    def __init__(
+        self,
+        bot
+    ):
 
-    # =========================
-    # GROUP
-    # =========================
+        self.bot=bot
+
+    async def cog_load(self):
+
+        db=await get_db()
+
+        await db.execute("""
+
+        CREATE TABLE IF NOT EXISTS ticket_blacklist(
+
+        guild_id INTEGER,
+        user_id INTEGER,
+
+        PRIMARY KEY(
+        guild_id,
+        user_id)
+
+        )
+
+        """)
+
+        await db.execute("""
+
+        CREATE TABLE IF NOT EXISTS ticket_counter(
+
+        guild_id INTEGER PRIMARY KEY,
+
+        count INTEGER
+
+        )
+
+        """)
+
+        await db.commit()
+
+        await db.close()
+
+        self.bot.add_view(
+            TicketView()
+        )
+
+        self.bot.add_view(
+            TicketControls()
+        )
 
     @commands.hybrid_group(
-        name="ticket",
-        description="Ticket system commands."
+        name="ticket"
     )
+
     @commands.has_permissions(
         administrator=True
     )
-    async def ticket(self, ctx):
+
+    async def ticket(
+        self,
+        ctx
+    ):
 
         if ctx.invoked_subcommand is None:
 
-            await ctx.send_help(ctx.command)
-
-    # =========================
-    # SETUP
-    # =========================
-
-    @ticket.command(
-        name="setup",
-        description="Setup ticket system."
-    )
-    async def ticket_setup(
-        self,
-        ctx,
-        category: discord.CategoryChannel,
-        log_channel: discord.TextChannel,
-        support_role: discord.Role
-    ):
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO ticket_settings
-                (
-                    guild_id,
-                    category_id,
-                    log_channel,
-                    panel_channel,
-                    support_role
-                )
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    ctx.guild.id,
-                    category.id,
-                    log_channel.id,
-                    ctx.channel.id,
-                    support_role.id
-                )
+            await ctx.send_help(
+                ctx.command
             )
 
-            await db.commit()
+    @ticket.command(
+        name="setup"
+    )
 
-        embed = discord.Embed(
-            title="🎫 Support Center",
-            description=(
-                "Need help?\n"
-                "Click the button below to create a ticket."
+    async def setup_ticket(
+
+        self,
+
+        ctx,
+
+        category:discord.CategoryChannel,
+
+        log_channel:discord.TextChannel,
+
+        support_role:discord.Role
+
+    ):
+
+        db=await get_db()
+
+        await db.execute("""
+
+        INSERT OR REPLACE INTO ticket_settings
+
+        VALUES(?,?,?,?,?)
+
+        """,(
+
+            ctx.guild.id,
+
+            category.id,
+
+            log_channel.id,
+
+            ctx.channel.id,
+
+            support_role.id
+
+        ))
+
+        await db.commit()
+
+        await db.close()
+
+        await ctx.send(
+
+            embed=base_embed(
+
+                title="Support Center",
+
+                description="Press button below."
+
             ),
-            color=TICKET_COLOR
-        )
 
-        embed.set_footer(
-            text="Dem Ticket System"
-        )
-
-        await ctx.send(
-            embed=embed,
             view=TicketView()
+
         )
 
         await ctx.send(
-            "✅ Ticket system configured."
-        )
 
-    # =========================
-    # ADD USER
-    # =========================
-
-    @ticket.command(
-        name="add",
-        description="Add a user to ticket."
-    )
-    async def ticket_add(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        await ctx.channel.set_permissions(
-            member,
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True
-        )
-
-        await ctx.send(
-            f"✅ Added {member.mention} to ticket."
-        )
-
-    # =========================
-    # REMOVE USER
-    # =========================
-
-    @ticket.command(
-        name="remove",
-        description="Remove user from ticket."
-    )
-    async def ticket_remove(
-        self,
-        ctx,
-        member: discord.Member
-    ):
-
-        await ctx.channel.set_permissions(
-            member,
-            overwrite=None
-        )
-
-        await ctx.send(
-            f"✅ Removed {member.mention} from ticket."
-        )
-
-    # =========================
-    # RENAME
-    # =========================
-
-    @ticket.command(
-        name="rename",
-        description="Rename ticket channel."
-    )
-    async def ticket_rename(
-        self,
-        ctx,
-        *,
-        name: str
-    ):
-
-        await ctx.channel.edit(
-            name=name
-        )
-
-        await ctx.send(
-            f"✅ Ticket renamed to `{name}`"
-        )
-
-    # =========================
-    # BLACKLIST
-    # =========================
-
-    @ticket.command(
-        name="blacklist"
-    )
-    async def blacklist(
-        self,
-        ctx,
-        user: discord.Member
-    ):
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute(
-                """
-                INSERT OR REPLACE INTO ticket_blacklist
-                VALUES (?, ?)
-                """,
-                (
-                    ctx.guild.id,
-                    user.id
-                )
+            embed=success_embed(
+                "Ticket system configured."
             )
 
-            await db.commit()
-
-        await ctx.send(
-            f"🚫 {user.mention} blacklisted."
         )
 
-    # =========================
-    # UNBLACKLIST
-    # =========================
-
-    @ticket.command(
-        name="unblacklist"
-    )
-    async def unblacklist(
-        self,
-        ctx,
-        user: discord.Member
-    ):
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute(
-                """
-                DELETE FROM ticket_blacklist
-                WHERE guild_id = ?
-                AND user_id = ?
-                """,
-                (
-                    ctx.guild.id,
-                    user.id
-                )
-            )
-
-            await db.commit()
-
-        await ctx.send(
-            f"✅ Removed blacklist from {user.mention}"
-        )
-
-    # =========================
-    # STATS
-    # =========================
-
-    @ticket.command(
-        name="stats"
-    )
-    async def ticket_stats(self, ctx):
-
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            async with db.execute(
-                """
-                SELECT COUNT(*)
-                FROM active_tickets
-                WHERE guild_id = ?
-                """,
-                (ctx.guild.id,)
-            ) as cursor:
-
-                active = (await cursor.fetchone())[0]
-
-        embed = discord.Embed(
-            title="🎫 Ticket Statistics",
-            color=TICKET_COLOR
-        )
-
-        embed.add_field(
-            name="Active Tickets",
-            value=str(active)
-        )
-
-        await ctx.send(embed=embed)
-
-
-# =========================
-# LOAD
-# =========================
 
 async def setup(bot):
 
