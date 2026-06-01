@@ -1,3 +1,5 @@
+# utils/config.py
+
 import os
 import re
 
@@ -6,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==================================================
-# BOT
+# BOT CONFIG
 # ==================================================
 
 TOKEN = os.getenv("TOKEN")
@@ -27,6 +29,16 @@ BOT_NAME = os.getenv(
 )
 
 # ==================================================
+# DATABASE
+# SINGLE DATABASE SYSTEM
+# ==================================================
+
+DB_PATH = os.getenv(
+    "DB_PATH",
+    "dem.db"
+)
+
+# ==================================================
 # COLORS
 # ==================================================
 
@@ -40,24 +52,17 @@ WARNING_COLOR = 0xFEE75C
 # RAILWAY
 # ==================================================
 
-RAILWAY_ENVIRONMENT = os.getenv(
-    "RAILWAY_ENVIRONMENT"
-)
-
-IS_RAILWAY = (
-    RAILWAY_ENVIRONMENT is not None
+IS_RAILWAY = bool(
+    os.getenv(
+        "RAILWAY_ENVIRONMENT"
+    )
 )
 
 # ==================================================
 # SECURITY
 # ==================================================
 
-WHITELIST = {
-
-    # Put owner IDs here
-
-    123456789012345678
-}
+WHITELIST = set()
 
 ANTI_NUKE_LIMIT = int(
     os.getenv(
@@ -70,6 +75,7 @@ BAD_WORDS = {
 
     "badword1",
     "badword2"
+
 }
 
 ANTI_LINK = os.getenv(
@@ -86,6 +92,7 @@ SCAM_PATTERN = re.compile(
     r"discord.*gift)",
 
     re.IGNORECASE
+
 )
 
 # ==================================================
@@ -126,10 +133,11 @@ LEVEL_ROLES = {
     10: "Silver Member",
     20: "Gold Member",
     50: "Elite Member"
+
 }
 
 # ==================================================
-# STAFF / ROLES
+# STAFF / AUTO ROLE
 # ==================================================
 
 STAFF_ROLE_NAME = "Staff"
