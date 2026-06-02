@@ -11,7 +11,6 @@ from utils.config import DB_PATH
 db_folder = os.path.dirname(DB_PATH)
 
 if db_folder:
-
     os.makedirs(
         db_folder,
         exist_ok=True
@@ -56,17 +55,14 @@ async def configure_db(
 
 
 # ==================================================
-# DATABASE CONNECTION
+# CONNECTION
 # ==================================================
 
 async def get_db():
 
     db = await aiosqlite.connect(
-
         DB_PATH,
-
         timeout=_CONNECTION_TIMEOUT
-
     )
 
     await configure_db(
@@ -79,7 +75,6 @@ async def get_db():
 async def close_db(db):
 
     if db:
-
         await db.close()
 
 
@@ -89,274 +84,155 @@ async def close_db(db):
 
 TABLES = [
 
-# SETTINGS
-
 """
 CREATE TABLE IF NOT EXISTS settings(
 guild_id INTEGER,
 feature TEXT,
 enabled INTEGER DEFAULT 1,
-
-PRIMARY KEY(
-guild_id,
-feature
-)
+PRIMARY KEY(guild_id,feature)
 )
 """,
-
-# WARNINGS
 
 """
 CREATE TABLE IF NOT EXISTS warnings(
-
 id INTEGER PRIMARY KEY AUTOINCREMENT,
-
 user_id INTEGER,
 guild_id INTEGER,
-
 reason TEXT,
-
 moderator_id INTEGER,
-
 timestamp INTEGER
-
 )
 """,
 
-# SECURITY
-
 """
 CREATE TABLE IF NOT EXISTS security_scores(
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
 score INTEGER DEFAULT 0,
-
-PRIMARY KEY(
-guild_id,
-user_id
-)
-
+PRIMARY KEY(guild_id,user_id)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS antinuke_whitelist(
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
-PRIMARY KEY(
-guild_id,
-user_id
-)
-
+PRIMARY KEY(guild_id,user_id)
 )
 """,
 
-# AUTOMOD
-
 """
 CREATE TABLE IF NOT EXISTS automod_settings(
-
 guild_id INTEGER,
-
 feature TEXT,
-
 enabled INTEGER,
-
 limit_value INTEGER,
-
 punishment TEXT,
-
-PRIMARY KEY(
-guild_id,
-feature
-)
-
+PRIMARY KEY(guild_id,feature)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS automod_whitelist(
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
-PRIMARY KEY(
-guild_id,
-user_id
-)
-
+PRIMARY KEY(guild_id,user_id)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS automod_warns(
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
 warns INTEGER DEFAULT 0,
-
-PRIMARY KEY(
-guild_id,
-user_id
-)
-
+PRIMARY KEY(guild_id,user_id)
 )
 """,
 
-# LOGGING
-
 """
 CREATE TABLE IF NOT EXISTS log_channels(
-
 guild_id INTEGER PRIMARY KEY,
-
 mod_log INTEGER,
-
 bot_log INTEGER
-
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS log_settings(
-
 guild_id INTEGER,
-
 log_type TEXT,
-
 enabled INTEGER DEFAULT 1,
-
-PRIMARY KEY(
-guild_id,
-log_type
-)
-
+PRIMARY KEY(guild_id,log_type)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS logs_data(
-
 case_id INTEGER PRIMARY KEY AUTOINCREMENT,
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
 moderator_id INTEGER,
-
 type TEXT,
-
 content TEXT,
-
 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-
 )
 """,
-
-# VERIFICATION
 
 """
 CREATE TABLE IF NOT EXISTS verification(
-
 guild_id INTEGER PRIMARY KEY,
-
 role_id INTEGER,
-
 channel_id INTEGER
-
 )
 """,
 
-# TICKETS
-
 """
 CREATE TABLE IF NOT EXISTS ticket_settings(
-
 guild_id INTEGER PRIMARY KEY,
-
 category_id INTEGER,
-
 log_channel INTEGER,
-
 panel_channel INTEGER,
-
 support_role INTEGER
-
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS ticket_blacklist(
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
-PRIMARY KEY(
-guild_id,
-user_id
-)
-
+PRIMARY KEY(guild_id,user_id)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS ticket_counter(
-
 guild_id INTEGER PRIMARY KEY,
-
 count INTEGER DEFAULT 0
-
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS active_tickets(
-
 channel_id INTEGER PRIMARY KEY,
-
 guild_id INTEGER,
-
 user_id INTEGER,
-
 created_at INTEGER
-
 )
 """,
-
-# WELCOME
 
 """
 CREATE TABLE IF NOT EXISTS welcome_settings(
-
 guild_id INTEGER PRIMARY KEY,
-
 welcome_channel INTEGER,
-
 leave_channel INTEGER,
-
 welcome_message TEXT,
-
 leave_message TEXT,
-
 autorole INTEGER,
-
 use_embed INTEGER DEFAULT 1
-
 )
 """,
 
-# GIVEAWAYS
+# FIXED GIVEAWAYS TABLE
 
 """
 CREATE TABLE IF NOT EXISTS giveaways(
@@ -371,14 +247,31 @@ prize TEXT,
 
 winners INTEGER,
 
-ends_at INTEGER,
+end_time INTEGER,
 
-hosted_by INTEGER
+ended INTEGER DEFAULT 0,
+
+req_role INTEGER,
+
+black_role INTEGER
 
 )
 """,
 
-# LEVELING
+"""
+CREATE TABLE IF NOT EXISTS giveaway_entries(
+
+message_id INTEGER,
+
+user_id INTEGER,
+
+PRIMARY KEY(
+message_id,
+user_id
+)
+
+)
+""",
 
 """
 CREATE TABLE IF NOT EXISTS levels(
@@ -413,87 +306,46 @@ user_id
 
 """
 CREATE TABLE IF NOT EXISTS level_settings(
-
 guild_id INTEGER PRIMARY KEY,
-
 enabled INTEGER DEFAULT 1,
-
 levelup_channel INTEGER,
-
 announce INTEGER DEFAULT 1
-
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS level_blacklist(
-
 guild_id INTEGER,
-
 channel_id INTEGER,
-
-PRIMARY KEY(
-guild_id,
-channel_id
-)
-
+PRIMARY KEY(guild_id,channel_id)
 )
 """,
 
 """
 CREATE TABLE IF NOT EXISTS xp_boosts(
-
 guild_id INTEGER,
-
 role_id INTEGER,
-
 multiplier REAL DEFAULT 1,
-
-PRIMARY KEY(
-guild_id,
-role_id
-)
-
+PRIMARY KEY(guild_id,role_id)
 )
 """,
-
-# REACTION ROLES
 
 """
 CREATE TABLE IF NOT EXISTS reaction_roles(
-
 guild_id INTEGER,
-
 role_id INTEGER,
-
 emoji TEXT,
-
-PRIMARY KEY(
-guild_id,
-role_id
-)
-
+PRIMARY KEY(guild_id,role_id)
 )
 """,
 
-# AFK
-
 """
 CREATE TABLE IF NOT EXISTS afk(
-
 user_id INTEGER,
-
 guild_id INTEGER,
-
 reason TEXT,
-
 since INTEGER,
-
-PRIMARY KEY(
-user_id,
-guild_id
-)
-
+PRIMARY KEY(user_id,guild_id)
 )
 """
 
@@ -508,26 +360,22 @@ INDEXES = [
 
 """
 CREATE INDEX IF NOT EXISTS idx_warns
-ON warnings(
-guild_id,
-user_id
-)
+ON warnings(guild_id,user_id)
 """,
 
 """
 CREATE INDEX IF NOT EXISTS idx_logs
-ON logs_data(
-guild_id,
-user_id
-)
+ON logs_data(guild_id,user_id)
 """,
 
 """
 CREATE INDEX IF NOT EXISTS idx_levels
-ON levels(
-guild_id,
-user_id
-)
+ON levels(guild_id,user_id)
+""",
+
+"""
+CREATE INDEX IF NOT EXISTS idx_giveaway_entries
+ON giveaway_entries(message_id)
 """
 
 ]
@@ -559,6 +407,4 @@ async def initialize_db():
 
     finally:
 
-        await close_db(
-            db
-        )
+        await close_db(db)
