@@ -1,18 +1,12 @@
-# cogs/tickets.py
-
 import io
 import asyncio
 import discord
 
 from datetime import datetime
+
 from discord.ext import commands
-from discord import app_commands
 
-from utils.database import (
-    get_db,
-    DB_PATH
-)
-
+from utils.database import get_db
 from utils.dispatch import dispatch_log
 from utils.embeds import (
     success_embed,
@@ -21,36 +15,38 @@ from utils.embeds import (
 )
 
 
-TICKET_COLOR = 0x2b2d31
+TICKET_COLOR = 0x2B2D31
 
 
-# ====================================
+# =====================================
 # HELPERS
-# ====================================
+# =====================================
 
 async def get_ticket_settings(guild_id):
 
-    db = await get_db()
+    async with await get_db() as db:
 
-    async with db.execute("""
+        async with db.execute(
 
-    SELECT
-    category_id,
-    log_channel,
-    panel_channel,
-    support_role
+            """
+            SELECT
 
-    FROM ticket_settings
+            category_id,
+            log_channel,
+            panel_channel,
+            support_role
 
-    WHERE guild_id=?
+            FROM ticket_settings
 
-    """,(guild_id,)) as cursor:
+            WHERE guild_id=?
 
-        data = await cursor.fetchone()
+            """,
 
-    await db.close()
+            (guild_id,)
 
-    return data
+        ) as cursor:
+
+            return await cursor.fetchone()
 
 
 async def get_open_ticket(
@@ -58,24 +54,114 @@ async def get_open_ticket(
     user_id
 ):
 
-    db = await get_db()
+    async with await get_db() as db:
 
-    async with db.execute("""
+        async with db.execute(
 
-    SELECT channel_id
+            """
+            SELECT channel_id
 
-    FROM active_tickets
+            FROM active_tickets
 
-    WHERE guild_id=?
-    AND user_id=?
+            WHERE guild_id=?
+            AND user_id=?
 
-    """,(guild_id,user_id)) as cursor:
+            """,
 
-        data = await cursor.fetchone()
+            (
+                guild_id,
+                user_id
+            )
 
-    await db.close()
+        ) as cursor:
 
-    return data
+            return await cursor.fetchone()
+
+
+async def is_blacklisted(
+    guild_id,
+    user_id
+):
+
+    async with await get_db() as db:
+
+        async with db.execute(
+
+            """
+            SELECT 1
+
+            FROM ticket_blacklist
+
+            WHERE guild_id=?
+            AND user_id=?
+
+            """,
+
+            (
+                guild_id,
+                user_id
+            )
+
+        ) as cursor:
+
+            return await cursor.fetchone()
+
+
+async def next_ticket_number(
+    guild_id
+):
+
+    async with await get_db() as db:
+
+        await db.execute(
+
+            """
+            INSERT OR IGNORE
+            INTO ticket_counter
+
+            VALUES(?,0)
+
+            """,
+
+            (guild_id,)
+
+        )
+
+        await db.execute(
+
+            """
+            UPDATE ticket_counter
+
+            SET count=count+1
+
+            WHERE guild_id=?
+
+            """,
+
+            (guild_id,)
+
+        )
+
+        await db.commit()
+
+        async with db.execute(
+
+            """
+            SELECT count
+
+            FROM ticket_counter
+
+            WHERE guild_id=?
+
+            """,
+
+            (guild_id,)
+
+        ) as cursor:
+
+            row=await cursor.fetchone()
+
+            return row[0]
 
 
 async def build_transcript(channel):
@@ -113,16 +199,16 @@ async def build_transcript(channel):
 
         )
 
-    text="\n".join(lines)
-
     return io.BytesIO(
-        text.encode()
+
+        "\n".join(lines).encode()
+
     )
 
 
-# ====================================
-# TICKET VIEW
-# ====================================
+# =====================================
+# OPEN BUTTON
+# =====================================
 
 class TicketView(discord.ui.View):
 
@@ -133,10 +219,15 @@ class TicketView(discord.ui.View):
         )
 
     @discord.ui.button(
+
         label="Open Ticket",
+
         emoji="🎫",
-        custom_id="dem_ticket_open",
-        style=discord.ButtonStyle.blurple
+
+        style=discord.ButtonStyle.blurple,
+
+        custom_id="dem_ticket_open"
+
     )
 
     async def open_ticket(
@@ -150,22 +241,38 @@ class TicketView(discord.ui.View):
         guild=interaction.guild
         user=interaction.user
 
-        existing=await get_open_ticket(
+        if await is_blacklisted(
             guild.id,
             user.id
+        ):
+
+            return await interaction.response.send_message(
+
+                "You cannot create tickets.",
+
+                ephemeral=True
+
+            )
+
+        existing=await get_open_ticket(
+
+            guild.id,
+
+            user.id
+
         )
 
         if existing:
 
-            ch=guild.get_channel(
+            channel=guild.get_channel(
                 existing[0]
             )
 
-            if ch:
+            if channel:
 
                 return await interaction.response.send_message(
 
-                    f"You already have {ch.mention}",
+                    f"You already have {channel.mention}",
 
                     ephemeral=True
 
@@ -185,16 +292,22 @@ class TicketView(discord.ui.View):
 
             )
 
-        category_id,log_channel,panel,support_role=settings
+        category_id,log_channel,panel_channel,support_role=settings
+
+        number=await next_ticket_number(
+            guild.id
+        )
 
         overwrites={
 
             guild.default_role:
+
             discord.PermissionOverwrite(
                 view_channel=False
             ),
 
             user:
+
             discord.PermissionOverwrite(
 
                 view_channel=True,
@@ -206,6 +319,7 @@ class TicketView(discord.ui.View):
             ),
 
             guild.me:
+
             discord.PermissionOverwrite(
 
                 view_channel=True,
@@ -232,54 +346,55 @@ class TicketView(discord.ui.View):
 
         channel=await guild.create_text_channel(
 
-            name=f"ticket-{user.name}",
-
-            overwrites=overwrites,
+            name=f"ticket-{number}",
 
             category=guild.get_channel(
                 category_id
-            )
+            ),
+
+            overwrites=overwrites
 
         )
 
-        db=await get_db()
+        async with await get_db() as db:
 
-        await db.execute("""
+            await db.execute(
 
-        INSERT OR REPLACE INTO active_tickets
+                """
+                INSERT INTO active_tickets
 
-        VALUES(?,?,?,?)
+                VALUES(?,?,?,?)
 
-        """,(
+                """,
 
-            channel.id,
+                (
 
-            guild.id,
+                    channel.id,
 
-            user.id,
+                    guild.id,
 
-            int(datetime.utcnow().timestamp())
+                    user.id,
 
-        ))
+                    int(datetime.utcnow().timestamp())
 
-        await db.commit()
+                )
 
-        await db.close()
-
-        embed=base_embed(
-
-            title="Ticket Created",
-
-            description=(
-                f"{user.mention}\n"
-                "Describe your issue."
             )
 
-        )
+            await db.commit()
 
         await channel.send(
 
-            embed=embed,
+            embed=base_embed(
+
+                title="Ticket Created",
+
+                description=(
+                    f"{user.mention}\n"
+                    "Describe your issue."
+                )
+
+            ),
 
             view=TicketControls()
 
@@ -293,6 +408,10 @@ class TicketView(discord.ui.View):
 
         )
 
+
+# =====================================
+# CLOSE BUTTON
+# =====================================
 
 class TicketControls(discord.ui.View):
 
@@ -322,53 +441,58 @@ class TicketControls(discord.ui.View):
 
         await interaction.response.defer()
 
-        channel=interaction.channel
-
         transcript=await build_transcript(
-            channel
-        )
 
-        file=discord.File(
-
-            transcript,
-
-            filename=f"{channel.name}.txt"
+            interaction.channel
 
         )
 
         settings=await get_ticket_settings(
+
             interaction.guild.id
+
         )
 
         if settings:
 
-            log=interaction.guild.get_channel(
+            log_channel=interaction.guild.get_channel(
+
                 settings[1]
+
             )
 
-            if log:
+            if log_channel:
 
-                await log.send(
+                await log_channel.send(
 
-                    file=file,
+                    content=f"Transcript {interaction.channel.name}",
 
-                    content=f"Transcript {channel.name}"
+                    file=discord.File(
+
+                        transcript,
+
+                        filename=f"{interaction.channel.name}.txt"
+
+                    )
 
                 )
 
-        db=await get_db()
+        async with await get_db() as db:
 
-        await db.execute("""
+            await db.execute(
 
-        DELETE FROM active_tickets
+                """
+                DELETE FROM active_tickets
 
-        WHERE channel_id=?
+                WHERE channel_id=?
 
-        """,(channel.id,))
+                """,
 
-        await db.commit()
+                (interaction.channel.id,)
 
-        await db.close()
+            )
+
+            await db.commit()
 
         await dispatch_log(
 
@@ -376,7 +500,7 @@ class TicketControls(discord.ui.View):
 
             "ticket_close",
 
-            content=f"{channel.name} closed",
+            content=f"{interaction.channel.name} closed",
 
             user_id=interaction.user.id
 
@@ -384,12 +508,12 @@ class TicketControls(discord.ui.View):
 
         await asyncio.sleep(2)
 
-        await channel.delete()
+        await interaction.channel.delete()
 
 
-# ====================================
+# =====================================
 # COG
-# ====================================
+# =====================================
 
 class Tickets(commands.Cog):
 
@@ -400,52 +524,7 @@ class Tickets(commands.Cog):
 
         self.bot=bot
 
-    async def cog_load(self):
-
-        db=await get_db()
-
-        await db.execute("""
-
-        CREATE TABLE IF NOT EXISTS ticket_blacklist(
-
-        guild_id INTEGER,
-        user_id INTEGER,
-
-        PRIMARY KEY(
-        guild_id,
-        user_id)
-
-        )
-
-        """)
-
-        await db.execute("""
-
-        CREATE TABLE IF NOT EXISTS ticket_counter(
-
-        guild_id INTEGER PRIMARY KEY,
-
-        count INTEGER
-
-        )
-
-        """)
-
-        await db.commit()
-
-        await db.close()
-
-        self.bot.add_view(
-            TicketView()
-        )
-
-        self.bot.add_view(
-            TicketControls()
-        )
-
-    @commands.hybrid_group(
-        name="ticket"
-    )
+    @commands.hybrid_group()
 
     @commands.has_permissions(
         administrator=True
@@ -456,17 +535,11 @@ class Tickets(commands.Cog):
         ctx
     ):
 
-        if ctx.invoked_subcommand is None:
+        pass
 
-            await ctx.send_help(
-                ctx.command
-            )
+    @ticket.command()
 
-    @ticket.command(
-        name="setup"
-    )
-
-    async def setup_ticket(
+    async def setup(
 
         self,
 
@@ -480,31 +553,36 @@ class Tickets(commands.Cog):
 
     ):
 
-        db=await get_db()
+        async with await get_db() as db:
 
-        await db.execute("""
+            await db.execute(
 
-        INSERT OR REPLACE INTO ticket_settings
+                """
+                INSERT OR REPLACE
 
-        VALUES(?,?,?,?,?)
+                INTO ticket_settings
 
-        """,(
+                VALUES(?,?,?,?,?)
 
-            ctx.guild.id,
+                """,
 
-            category.id,
+                (
 
-            log_channel.id,
+                    ctx.guild.id,
 
-            ctx.channel.id,
+                    category.id,
 
-            support_role.id
+                    log_channel.id,
 
-        ))
+                    ctx.channel.id,
 
-        await db.commit()
+                    support_role.id
 
-        await db.close()
+                )
+
+            )
+
+            await db.commit()
 
         await ctx.send(
 
@@ -512,7 +590,7 @@ class Tickets(commands.Cog):
 
                 title="Support Center",
 
-                description="Press button below."
+                description="Press below."
 
             ),
 
@@ -523,7 +601,9 @@ class Tickets(commands.Cog):
         await ctx.send(
 
             embed=success_embed(
+
                 "Ticket system configured."
+
             )
 
         )
@@ -532,5 +612,7 @@ class Tickets(commands.Cog):
 async def setup(bot):
 
     await bot.add_cog(
+
         Tickets(bot)
+
     )
