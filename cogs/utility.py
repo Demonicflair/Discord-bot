@@ -14,8 +14,6 @@ from utils.config import (
 
 from utils.database import get_db
 
-from utils.dispatch import dispatch_log
-
 
 class Utility(commands.Cog):
 
@@ -78,7 +76,7 @@ class Utility(commands.Cog):
             24
         )
 
-        parts=[]
+        parts = []
 
         if days:
             parts.append(f"{days}d")
@@ -98,17 +96,18 @@ class Utility(commands.Cog):
     # USER INFO
     # ===================================
 
-    @commands.hybrid_command()
-
+    @commands.hybrid_command(
+        description="View information about a user."
+    )
     async def userinfo(
         self,
         ctx,
-        member:discord.Member=None
+        member: discord.Member = None
     ):
 
-        member=member or ctx.author
+        member = member or ctx.author
 
-        embed=self.dem_embed(
+        embed = self.dem_embed(
 
             color=member.color
             if member.color.value
@@ -130,7 +129,7 @@ class Utility(commands.Cog):
 
         )
 
-        roles=[
+        roles = [
 
             r.mention
 
@@ -140,13 +139,24 @@ class Utility(commands.Cog):
 
         ]
 
+        role_text = " ".join(
+            roles[:15]
+        ) or "None"
+
+        if len(role_text) > 1024:
+
+            role_text = role_text[:1000] + "..."
+
         embed.add_field(
 
             name="User",
 
             value=(
+
                 f"ID: `{member.id}`\n"
+
                 f"Bot: `{member.bot}`"
+
             )
 
         )
@@ -175,9 +185,7 @@ class Utility(commands.Cog):
 
             name=f"Roles [{len(roles)}]",
 
-            value=" ".join(
-                roles[:15]
-            ) or "None",
+            value=role_text,
 
             inline=False
 
@@ -207,44 +215,48 @@ class Utility(commands.Cog):
     # PING
     # ===================================
 
-    @commands.hybrid_command()
-
+    @commands.hybrid_command(
+        description="Check latency."
+    )
     async def ping(
         self,
         ctx
     ):
 
-        start=time.perf_counter()
+        start = time.perf_counter()
 
-        msg=await ctx.send(
+        msg = await ctx.send(
             "Pinging..."
         )
 
-        end=time.perf_counter()
+        message_latency = round(
 
-        message_latency=round(
-
-            (end-start)*1000
-
-        )
-
-        gateway=round(
-
-            self.bot.latency*1000
+            (
+                time.perf_counter()
+                - start
+            ) * 1000
 
         )
 
-        embed=self.dem_embed(
+        gateway = round(
+            self.bot.latency * 1000
+        )
 
-            title="Pong"
+        embed = self.dem_embed(
+
+            title="🏓 Pong"
 
         )
 
-        embed.description=(
+        embed.description = (
 
-            f"Gateway: `{gateway}ms`\n"
+            f"**Gateway**\n"
 
-            f"Message: `{message_latency}ms`"
+            f"`{gateway}ms`\n\n"
+
+            f"**Message**\n"
+
+            f"`{message_latency}ms`"
 
         )
 
@@ -260,26 +272,30 @@ class Utility(commands.Cog):
     # BOT INFO
     # ===================================
 
-    @commands.hybrid_command()
-
+    @commands.hybrid_command(
+        description="View bot stats."
+    )
     async def botinfo(
         self,
         ctx
     ):
 
-        process=psutil.Process()
+        process = psutil.Process()
 
-        uptime=int(
+        uptime = int(
 
-            time.time()
+            (
+                discord.utils.utcnow()
 
-            -
+                -
 
-            process.create_time()
+                self.bot.start_time
+
+            ).total_seconds()
 
         )
 
-        ram=round(
+        ram = round(
 
             process.memory_info().rss
 
@@ -289,7 +305,7 @@ class Utility(commands.Cog):
 
         )
 
-        embed=self.dem_embed(
+        embed = self.dem_embed(
 
             title=f"{BOT_NAME}"
 
@@ -299,9 +315,7 @@ class Utility(commands.Cog):
 
             name="Servers",
 
-            value=str(
-                len(self.bot.guilds)
-            )
+            value=f"`{len(self.bot.guilds)}`"
 
         )
 
@@ -309,9 +323,15 @@ class Utility(commands.Cog):
 
             name="Users",
 
-            value=str(
-                len(self.bot.users)
-            )
+            value=f"`{len(self.bot.users)}`"
+
+        )
+
+        embed.add_field(
+
+            name="Commands",
+
+            value=f"`{len(self.bot.commands)}`"
 
         )
 
@@ -319,7 +339,7 @@ class Utility(commands.Cog):
 
             name="RAM",
 
-            value=f"{ram}MB"
+            value=f"`{ram} MB`"
 
         )
 
@@ -333,11 +353,17 @@ class Utility(commands.Cog):
 
         embed.add_field(
 
+            name="Discord.py",
+
+            value=discord.__version__()
+
+        )
+
+        embed.add_field(
+
             name="Uptime",
 
-            value=self.format_time(
-                uptime
-            ),
+            value=f"`{self.format_time(uptime)}`",
 
             inline=False
 
@@ -351,8 +377,9 @@ class Utility(commands.Cog):
     # AFK
     # ===================================
 
-    @commands.hybrid_command()
-
+    @commands.hybrid_command(
+        description="Set AFK status."
+    )
     async def afk(
         self,
         ctx,
@@ -365,8 +392,11 @@ class Utility(commands.Cog):
             await db.execute(
 
                 """
+
                 INSERT OR REPLACE INTO afk
+
                 VALUES(?,?,?,?)
+
                 """,
 
                 (
@@ -395,7 +425,7 @@ class Utility(commands.Cog):
 
                 )
 
-        except:
+        except Exception:
 
             pass
 
@@ -403,7 +433,13 @@ class Utility(commands.Cog):
 
             embed=self.dem_embed(
 
-                description=f"{ctx.author.mention} is now AFK\nReason: {reason}"
+                description=(
+
+                    f"{ctx.author.mention} is now AFK.\n\n"
+
+                    f"**Reason:** {reason}"
+
+                )
 
             )
 
@@ -439,6 +475,7 @@ class Utility(commands.Cog):
                 FROM afk
 
                 WHERE user_id=?
+
                 AND guild_id=?
 
                 """,
@@ -453,11 +490,11 @@ class Utility(commands.Cog):
 
             ) as cursor:
 
-                afk=await cursor.fetchone()
+                afk = await cursor.fetchone()
 
             if afk:
 
-                reason,since=afk
+                _, since = afk
 
                 await db.execute(
 
@@ -466,6 +503,7 @@ class Utility(commands.Cog):
                     DELETE FROM afk
 
                     WHERE user_id=?
+
                     AND guild_id=?
 
                     """,
@@ -482,29 +520,67 @@ class Utility(commands.Cog):
 
                 await db.commit()
 
-                duration=self.format_time(
+                try:
 
-                    time.time()-since
+                    if message.author.display_name.startswith("[AFK]"):
+
+                        await message.author.edit(
+
+                            nick=message.author.display_name.replace(
+
+                                "[AFK] ",
+
+                                "",
+
+                                1
+
+                            )
+
+                        )
+
+                except Exception:
+
+                    pass
+
+                duration = self.format_time(
+
+                    time.time() - since
 
                 )
 
-                await message.channel.send(
+                try:
 
-                    embed=self.dem_embed(
+                    await message.channel.send(
 
-                        title="Welcome Back",
+                        embed=self.dem_embed(
 
-                        description=f"AFK removed after `{duration}`",
+                            title="Welcome Back",
 
-                        color=discord.Color.green()
+                            description=f"AFK removed after `{duration}`",
 
-                    ),
+                            color=discord.Color.green()
 
-                    delete_after=8
+                        ),
 
-                )
+                        delete_after=8
 
-            for user in message.mentions:
+                    )
+
+                except discord.HTTPException:
+
+                    pass
+
+            mentioned_ids = {
+
+                user.id
+
+                for user in message.mentions
+
+                if not user.bot
+
+            }
+
+            for user_id in mentioned_ids:
 
                 async with db.execute(
 
@@ -515,13 +591,14 @@ class Utility(commands.Cog):
                     FROM afk
 
                     WHERE user_id=?
+
                     AND guild_id=?
 
                     """,
 
                     (
 
-                        user.id,
+                        user_id,
 
                         message.guild.id
 
@@ -529,25 +606,37 @@ class Utility(commands.Cog):
 
                 ) as cur:
 
-                    data=await cur.fetchone()
+                    data = await cur.fetchone()
 
-                if data:
+                if not data:
 
-                    reason,since=data
+                    continue
+
+                user = message.guild.get_member(
+                    user_id
+                )
+
+                if not user:
+
+                    continue
+
+                reason, since = data
+
+                try:
 
                     await message.channel.send(
 
                         embed=self.dem_embed(
 
-                            title="User AFK",
+                            title="💤 User AFK",
 
                             description=(
 
-                                f"{user.mention}\n"
+                                f"{user.mention}\n\n"
 
-                                f"Reason: {reason}\n"
+                                f"**Reason:** {reason}\n"
 
-                                f"Since: <t:{since}:R>"
+                                f"**Since:** <t:{since}:R>"
 
                             )
 
@@ -556,6 +645,10 @@ class Utility(commands.Cog):
                         delete_after=10
 
                     )
+
+                except discord.HTTPException:
+
+                    pass
 
 
 async def setup(bot):
