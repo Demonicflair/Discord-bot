@@ -1,7 +1,6 @@
 # cogs/utility.py
 
 import discord
-import aiosqlite
 import platform
 import psutil
 import time
@@ -10,42 +9,24 @@ from discord.ext import commands
 
 from utils.config import (
     BRAND_COLOR,
-    DB_PATH,
     BOT_NAME
 )
 
+from utils.database import get_db
+
 from utils.dispatch import dispatch_log
 
-# =========================
-# UTILITY COG
-# =========================
+
 class Utility(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
 
-    # =========================
-    # DATABASE INIT
-    # =========================
-    async def cog_load(self):
+    # ===================================
+    # EMBEDS
+    # ===================================
 
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute("""
-                CREATE TABLE IF NOT EXISTS afk (
-                    user_id INTEGER,
-                    guild_id INTEGER,
-                    reason TEXT,
-                    since INTEGER,
-                    PRIMARY KEY(user_id, guild_id)
-                )
-            """)
-
-            await db.commit()
-
-    # =========================
-    # PREMIUM EMBED
-    # =========================
     def dem_embed(
         self,
         title=None,
@@ -54,28 +35,50 @@ class Utility(commands.Cog):
     ):
 
         embed = discord.Embed(
+
             title=title,
+
             description=description,
+
             color=color,
+
             timestamp=discord.utils.utcnow()
+
         )
 
         embed.set_footer(
-            text=f"{BOT_NAME} • Premium Utility System"
+
+            text=f"{BOT_NAME} • Utility System"
+
         )
 
         return embed
 
-    # =========================
-    # TIME FORMATTER
-    # =========================
-    def format_time(self, seconds):
+    # ===================================
+    # FORMAT TIME
+    # ===================================
 
-        minutes, seconds = divmod(seconds, 60)
-        hours, minutes = divmod(minutes, 60)
-        days, hours = divmod(hours, 24)
+    def format_time(
+        self,
+        seconds
+    ):
 
-        parts = []
+        minutes, seconds = divmod(
+            int(seconds),
+            60
+        )
+
+        hours, minutes = divmod(
+            minutes,
+            60
+        )
+
+        days, hours = divmod(
+            hours,
+            24
+        )
+
+        parts=[]
 
         if days:
             parts.append(f"{days}d")
@@ -89,570 +92,476 @@ class Utility(commands.Cog):
         if seconds:
             parts.append(f"{seconds}s")
 
-        return " ".join(parts)
+        return " ".join(parts) or "0s"
 
-    # =========================
+    # ===================================
     # USER INFO
-    # =========================
-    @commands.hybrid_command(
-        name="userinfo",
-        description="View detailed information about a user."
-    )
+    # ===================================
+
+    @commands.hybrid_command()
+
     async def userinfo(
         self,
         ctx,
-        member: discord.Member = None
+        member:discord.Member=None
     ):
 
-        member = member or ctx.author
+        member=member or ctx.author
 
-        embed = self.dem_embed(
-            color=member.color if member.color != discord.Color.default() else BRAND_COLOR
+        embed=self.dem_embed(
+
+            color=member.color
+            if member.color.value
+            else BRAND_COLOR
+
         )
 
         embed.set_author(
-            name=f"{member}",
+
+            name=str(member),
+
             icon_url=member.display_avatar.url
+
         )
 
         embed.set_thumbnail(
+
             url=member.display_avatar.url
+
         )
 
-        # =========================
-        # BASIC INFO
-        # =========================
-        embed.add_field(
-            name="👤 Username",
-            value=f"`{member}`",
-            inline=True
-        )
+        roles=[
 
-        embed.add_field(
-            name="🆔 User ID",
-            value=f"`{member.id}`",
-            inline=True
-        )
+            r.mention
 
-        embed.add_field(
-            name="🤖 Bot",
-            value="Yes" if member.bot else "No",
-            inline=True
-        )
+            for r in reversed(
+                member.roles[1:]
+            )
 
-        # =========================
-        # ACCOUNT INFO
-        # =========================
-        embed.add_field(
-            name="📅 Account Created",
-            value=f"<t:{int(member.created_at.timestamp())}:F>",
-            inline=False
-        )
-
-        embed.add_field(
-            name="📥 Joined Server",
-            value=f"<t:{int(member.joined_at.timestamp())}:F>",
-            inline=False
-        )
-
-        # =========================
-        # ROLES
-        # =========================
-        roles = [
-            role.mention
-            for role in reversed(member.roles[1:])
         ]
 
-        role_text = (
-            " ".join(roles[:15])
-            if roles else
-            "No roles"
+        embed.add_field(
+
+            name="User",
+
+            value=(
+                f"ID: `{member.id}`\n"
+                f"Bot: `{member.bot}`"
+            )
+
         )
 
-        if len(role_text) > 1024:
-            role_text = role_text[:1000] + "..."
-
         embed.add_field(
-            name=f"🎭 Roles [{len(roles)}]",
-            value=role_text,
+
+            name="Created",
+
+            value=f"<t:{int(member.created_at.timestamp())}:F>",
+
             inline=False
-        )
 
-        # =========================
-        # EXTRA
-        # =========================
-        embed.add_field(
-            name="🛡️ Highest Role",
-            value=member.top_role.mention,
-            inline=True
         )
 
         embed.add_field(
-            name="🚀 Boosting",
-            value=(
-                f"Since <t:{int(member.premium_since.timestamp())}:R>"
-                if member.premium_since
-                else "No"
-            ),
-            inline=True
+
+            name="Joined",
+
+            value=f"<t:{int(member.joined_at.timestamp())}:F>",
+
+            inline=False
+
         )
 
         embed.add_field(
-            name="📛 Nickname",
-            value=member.nick or "None",
-            inline=True
-        )
 
-        await ctx.send(embed=embed)
+            name=f"Roles [{len(roles)}]",
 
-    # =========================
-    # SERVER INFO
-    # =========================
-    @commands.hybrid_command(
-        name="serverinfo",
-        description="View detailed server information."
-    )
-    async def serverinfo(self, ctx):
+            value=" ".join(
+                roles[:15]
+            ) or "None",
 
-        guild = ctx.guild
+            inline=False
 
-        humans = len([
-            m for m in guild.members
-            if not m.bot
-        ])
-
-        bots = guild.member_count - humans
-
-        embed = self.dem_embed(
-            title=f"{guild.name} Statistics"
-        )
-
-        if guild.icon:
-            embed.set_thumbnail(
-                url=guild.icon.url
-            )
-
-        if guild.banner:
-            embed.set_image(
-                url=guild.banner.url
-            )
-
-        # =========================
-        # GENERAL
-        # =========================
-        embed.add_field(
-            name="👑 Owner",
-            value=guild.owner.mention,
-            inline=True
         )
 
         embed.add_field(
-            name="🆔 Server ID",
-            value=f"`{guild.id}`",
-            inline=True
+
+            name="Highest Role",
+
+            value=member.top_role.mention
+
         )
 
         embed.add_field(
-            name="📅 Created",
-            value=f"<t:{int(guild.created_at.timestamp())}:D>",
-            inline=True
+
+            name="Nickname",
+
+            value=member.nick or "None"
+
         )
 
-        # =========================
-        # MEMBERS
-        # =========================
-        embed.add_field(
-            name="👥 Members",
-            value=(
-                f"Total: `{guild.member_count}`\n"
-                f"Humans: `{humans}`\n"
-                f"Bots: `{bots}`"
-            ),
-            inline=True
-        )
-
-        # =========================
-        # CHANNELS
-        # =========================
-        embed.add_field(
-            name="💬 Channels",
-            value=(
-                f"Text: `{len(guild.text_channels)}`\n"
-                f"Voice: `{len(guild.voice_channels)}`\n"
-                f"Categories: `{len(guild.categories)}`"
-            ),
-            inline=True
-        )
-
-        # =========================
-        # BOOSTS
-        # =========================
-        embed.add_field(
-            name="🚀 Nitro Boost",
-            value=(
-                f"Level `{guild.premium_tier}`\n"
-                f"Boosts `{guild.premium_subscription_count}`"
-            ),
-            inline=True
-        )
-
-        # =========================
-        # SECURITY
-        # =========================
-        embed.add_field(
-            name="🛡️ Security",
-            value=(
-                f"Verification: `{guild.verification_level}`\n"
-                f"MFA Level: `{guild.mfa_level}`"
-            ),
-            inline=True
-        )
-
-        # =========================
-        # EXTRA
-        # =========================
-        embed.add_field(
-            name="🎭 Roles",
-            value=f"`{len(guild.roles)}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="😀 Emojis",
-            value=f"`{len(guild.emojis)}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="🌎 Preferred Locale",
-            value=f"`{guild.preferred_locale}`",
-            inline=True
-        )
-
-        await ctx.send(embed=embed)
-
-    # =========================
-    # PING
-    # =========================
-    @commands.hybrid_command(
-        name="ping",
-        description="Check bot latency and response speed."
-    )
-    async def ping(self, ctx):
-
-        start = time.perf_counter()
-
-        msg = await ctx.send(
-            "📡 Establishing secure connection..."
-        )
-
-        end = time.perf_counter()
-
-        message_latency = round(
-            (end - start) * 1000
-        )
-
-        gateway = round(
-            self.bot.latency * 1000
-        )
-
-        if gateway <= 100:
-            status = "🟢 Excellent"
-
-        elif gateway <= 250:
-            status = "🟡 Stable"
-
-        else:
-            status = "🔴 High Latency"
-
-        embed = self.dem_embed(
-            title="🏓 Connection Statistics"
-        )
-
-        embed.description = (
-            f"**Gateway Latency**\n"
-            f"`{gateway}ms`\n\n"
-            f"**Message Response**\n"
-            f"`{message_latency}ms`\n\n"
-            f"**Status**\n"
-            f"{status}"
-        )
-
-        await msg.edit(
-            content=None,
+        await ctx.send(
             embed=embed
         )
 
-    # =========================
-    # BOT INFO
-    # =========================
-    @commands.hybrid_command(
-        name="botinfo",
-        description="View information about the bot."
-    )
-    async def botinfo(self, ctx):
+    # ===================================
+    # PING
+    # ===================================
 
-        process = psutil.Process()
+    @commands.hybrid_command()
 
-        ram = round(
-            process.memory_info().rss / 1024 / 1024,
-            2
-        )
-
-        uptime = int(
-            time.time() - process.create_time()
-        )
-
-        embed = self.dem_embed(
-            title=f"{BOT_NAME} Statistics"
-        )
-
-        embed.add_field(
-            name="🌍 Servers",
-            value=f"`{len(self.bot.guilds)}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="👥 Users",
-            value=f"`{len(self.bot.users)}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="⚡ Commands",
-            value=f"`{len(self.bot.commands)}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="💾 RAM Usage",
-            value=f"`{ram} MB`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="🐍 Python",
-            value=f"`{platform.python_version()}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="📚 Discord.py",
-            value=f"`{discord.__version__}`",
-            inline=True
-        )
-
-        embed.add_field(
-            name="⏳ Uptime",
-            value=f"`{self.format_time(uptime)}`",
-            inline=False
-        )
-
-        await ctx.send(embed=embed)
-
-    # =========================
-    # AVATAR
-    # =========================
-    @commands.hybrid_command(
-        name="avatar",
-        description="View a user's avatar."
-    )
-    async def avatar(
+    async def ping(
         self,
-        ctx,
-        member: discord.Member = None
+        ctx
     ):
 
-        member = member or ctx.author
+        start=time.perf_counter()
 
-        embed = self.dem_embed(
-            title=f"{member}'s Avatar"
+        msg=await ctx.send(
+            "Pinging..."
         )
 
-        embed.set_image(
-            url=member.display_avatar.url
+        end=time.perf_counter()
+
+        message_latency=round(
+
+            (end-start)*1000
+
         )
 
-        await ctx.send(embed=embed)
+        gateway=round(
 
-    # =========================
-    # AFK COMMAND
-    # =========================
-    @commands.hybrid_command(
-        name="afk",
-        description="Set your AFK status."
-    )
+            self.bot.latency*1000
+
+        )
+
+        embed=self.dem_embed(
+
+            title="Pong"
+
+        )
+
+        embed.description=(
+
+            f"Gateway: `{gateway}ms`\n"
+
+            f"Message: `{message_latency}ms`"
+
+        )
+
+        await msg.edit(
+
+            content=None,
+
+            embed=embed
+
+        )
+
+    # ===================================
+    # BOT INFO
+    # ===================================
+
+    @commands.hybrid_command()
+
+    async def botinfo(
+        self,
+        ctx
+    ):
+
+        process=psutil.Process()
+
+        uptime=int(
+
+            time.time()
+
+            -
+
+            process.create_time()
+
+        )
+
+        ram=round(
+
+            process.memory_info().rss
+
+            /1024/1024,
+
+            2
+
+        )
+
+        embed=self.dem_embed(
+
+            title=f"{BOT_NAME}"
+
+        )
+
+        embed.add_field(
+
+            name="Servers",
+
+            value=str(
+                len(self.bot.guilds)
+            )
+
+        )
+
+        embed.add_field(
+
+            name="Users",
+
+            value=str(
+                len(self.bot.users)
+            )
+
+        )
+
+        embed.add_field(
+
+            name="RAM",
+
+            value=f"{ram}MB"
+
+        )
+
+        embed.add_field(
+
+            name="Python",
+
+            value=platform.python_version()
+
+        )
+
+        embed.add_field(
+
+            name="Uptime",
+
+            value=self.format_time(
+                uptime
+            ),
+
+            inline=False
+
+        )
+
+        await ctx.send(
+            embed=embed
+        )
+
+    # ===================================
+    # AFK
+    # ===================================
+
+    @commands.hybrid_command()
+
     async def afk(
         self,
         ctx,
         *,
-        reason: str = "Away from keyboard"
+        reason="Away"
     ):
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             await db.execute(
+
                 """
                 INSERT OR REPLACE INTO afk
-                VALUES (?, ?, ?, ?)
+                VALUES(?,?,?,?)
                 """,
+
                 (
+
                     ctx.author.id,
+
                     ctx.guild.id,
+
                     reason,
+
                     int(time.time())
+
                 )
+
             )
 
             await db.commit()
 
-        # Nickname
-        if not ctx.author.display_name.startswith("[AFK]"):
+        try:
 
-            try:
+            if not ctx.author.display_name.startswith("[AFK]"):
+
                 await ctx.author.edit(
-                    nick=f"[AFK] {ctx.author.display_name}"
-                )
-            except:
-                pass
 
-        embed = self.dem_embed(
-            description=(
-                f"💤 {ctx.author.mention} is now AFK.\n\n"
-                f"**Reason:** {reason}"
+                    nick=f"[AFK] {ctx.author.display_name}"
+
+                )
+
+        except:
+
+            pass
+
+        await ctx.send(
+
+            embed=self.dem_embed(
+
+                description=f"{ctx.author.mention} is now AFK\nReason: {reason}"
+
             )
+
         )
 
-        await ctx.send(embed=embed)
-
-    # =========================
+    # ===================================
     # AFK LISTENER
-    # =========================
+    # ===================================
+
     @commands.Cog.listener()
-    async def on_message(self, message):
+
+    async def on_message(
+        self,
+        message
+    ):
 
         if not message.guild:
+
             return
 
         if message.author.bot:
+
             return
 
-        # =========================
-        # REMOVE AFK
-        # =========================
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             async with db.execute(
+
                 """
-                SELECT reason, since
+
+                SELECT reason,since
+
                 FROM afk
-                WHERE user_id=? AND guild_id=?
+
+                WHERE user_id=?
+                AND guild_id=?
+
                 """,
+
                 (
+
                     message.author.id,
+
                     message.guild.id
+
                 )
+
             ) as cursor:
 
-                data = await cursor.fetchone()
+                afk=await cursor.fetchone()
+
+            if afk:
+
+                reason,since=afk
+
+                await db.execute(
+
+                    """
+
+                    DELETE FROM afk
+
+                    WHERE user_id=?
+                    AND guild_id=?
+
+                    """,
+
+                    (
+
+                        message.author.id,
+
+                        message.guild.id
+
+                    )
+
+                )
+
+                await db.commit()
+
+                duration=self.format_time(
+
+                    time.time()-since
+
+                )
+
+                await message.channel.send(
+
+                    embed=self.dem_embed(
+
+                        title="Welcome Back",
+
+                        description=f"AFK removed after `{duration}`",
+
+                        color=discord.Color.green()
+
+                    ),
+
+                    delete_after=8
+
+                )
+
+            for user in message.mentions:
+
+                async with db.execute(
+
+                    """
+
+                    SELECT reason,since
+
+                    FROM afk
+
+                    WHERE user_id=?
+                    AND guild_id=?
+
+                    """,
+
+                    (
+
+                        user.id,
+
+                        message.guild.id
+
+                    )
+
+                ) as cur:
+
+                    data=await cur.fetchone()
 
                 if data:
 
-                    reason, since = data
-
-                    await db.execute(
-                        """
-                        DELETE FROM afk
-                        WHERE user_id=? AND guild_id=?
-                        """,
-                        (
-                            message.author.id,
-                            message.guild.id
-                        )
-                    )
-
-                    await db.commit()
-
-                    try:
-
-                        nick = (
-                            message.author.display_name
-                            .replace("[AFK] ", "")
-                        )
-
-                        await message.author.edit(
-                            nick=nick
-                        )
-
-                    except:
-                        pass
-
-                    duration = self.format_time(
-                        int(time.time()) - since
-                    )
-
-                    embed = self.dem_embed(
-                        title="👋 Welcome Back",
-                        description=(
-                            f"{message.author.mention}, "
-                            f"your AFK has been removed.\n\n"
-                            f"**AFK Duration:** `{duration}`"
-                        ),
-                        color=discord.Color.green()
-                    )
+                    reason,since=data
 
                     await message.channel.send(
-                        embed=embed,
-                        delete_after=8
-                    )
 
-        # =========================
-        # AFK MENTION ALERT
-        # =========================
-        for user in message.mentions:
+                        embed=self.dem_embed(
 
-            async with aiosqlite.connect(DB_PATH) as db:
+                            title="User AFK",
 
-                async with db.execute(
-                    """
-                    SELECT reason, since
-                    FROM afk
-                    WHERE user_id=? AND guild_id=?
-                    """,
-                    (
-                        user.id,
-                        message.guild.id
-                    )
-                ) as cursor:
-
-                    afk = await cursor.fetchone()
-
-                    if afk:
-
-                        reason, since = afk
-
-                        embed = self.dem_embed(
-                            title="💤 User is AFK",
                             description=(
-                                f"{user.mention} is currently away.\n\n"
-                                f"**Reason:** {reason}\n"
-                                f"**Since:** <t:{since}:R>"
-                            ),
-                            color=discord.Color.orange()
-                        )
 
-                        await message.channel.send(
-                            embed=embed,
-                            delete_after=10
-                        )
+                                f"{user.mention}\n"
 
-        await self.bot.process_commands(message)
+                                f"Reason: {reason}\n"
+
+                                f"Since: <t:{since}:R>"
+
+                            )
+
+                        ),
+
+                        delete_after=10
+
+                    )
 
 
-# =========================
-# LOAD COG
-# =========================
 async def setup(bot):
 
-    await bot.add_cog(Utility(bot))
+    await bot.add_cog(
+
+        Utility(bot)
+
+    )
