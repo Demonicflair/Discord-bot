@@ -6,9 +6,9 @@ from discord.ext import commands
 from discord import app_commands
 
 from utils.dispatch import dispatch_log
+from utils.config import BRAND_COLOR
 
 
-MOD_COLOR = 0x2B2D31
 SUCCESS = 0x57F287
 ERROR = 0xED4245
 WARNING = 0xFEE75C
@@ -17,75 +17,112 @@ WARNING = 0xFEE75C
 class Moderation(commands.Cog):
 
     def __init__(self, bot):
+
         self.bot = bot
 
-    # ==================================================
+    # ==========================================
     # EMBED
-    # ==================================================
+    # ==========================================
 
     def embed(
         self,
         title=None,
         description=None,
-        color=MOD_COLOR
+        color=BRAND_COLOR
     ):
 
-        embed = discord.Embed(
+        embed=discord.Embed(
+
             title=title,
+
             description=description,
+
             color=color,
+
             timestamp=discord.utils.utcnow()
+
         )
 
         embed.set_footer(
-            text="Dem Moderation System"
+
+            text="Dem Moderation"
+
         )
 
         return embed
 
-    # ==================================================
-    # HIERARCHY CHECK
-    # ==================================================
+    # ==========================================
+    # CHECKS
+    # ==========================================
 
     async def can_moderate(
+
         self,
-        moderator: discord.Member,
-        target: discord.Member
+
+        moderator:discord.Member,
+
+        target:discord.Member
+
     ):
 
         if moderator.id == target.id:
 
             return False
 
-        if target == target.guild.owner:
+        if target.guild.owner == target:
 
             return False
 
-        if moderator == moderator.guild.owner:
+        if moderator.guild.owner == moderator:
 
             return True
 
-        bot_member = moderator.guild.me
+        bot_member=target.guild.me
 
         if target.top_role >= moderator.top_role:
 
             return False
 
-        if bot_member and target.top_role >= bot_member.top_role:
+        if bot_member:
 
-            return False
+            if target.top_role >= bot_member.top_role:
+
+                return False
 
         return True
 
-    # ==================================================
-    # DM USER
-    # ==================================================
+    async def fail(
+        self,
+        ctx,
+        text
+    ):
+
+        await ctx.send(
+
+            embed=self.embed(
+
+                description=f"❌ {text}",
+
+                color=ERROR
+
+            )
+
+        )
+
+    # ==========================================
+    # DM
+    # ==========================================
 
     async def dm_user(
+
         self,
+
         member,
+
         action,
+
         reason
+
     ):
 
         try:
@@ -97,8 +134,11 @@ class Moderation(commands.Cog):
                     title=f"You were {action}",
 
                     description=(
+
                         f"Server: {member.guild.name}\n"
+
                         f"Reason: {reason}"
+
                     ),
 
                     color=ERROR
@@ -107,73 +147,89 @@ class Moderation(commands.Cog):
 
             )
 
-        except Exception:
+        except:
 
             pass
 
-    # ==================================================
+    # ==========================================
     # KICK
-    # ==================================================
+    # ==========================================
 
-    @commands.hybrid_command(name="kick")
-
-    @commands.cooldown(
-        2,
-        10,
-        commands.BucketType.user
-    )
+    @commands.hybrid_command()
 
     @commands.has_permissions(
         kick_members=True
     )
 
+    @commands.bot_has_permissions(
+        kick_members=True
+    )
+
     async def kick(
+
         self,
+
         ctx,
-        member: discord.Member,
+
+        member:discord.Member,
+
         *,
+
         reason="No reason provided"
+
     ):
 
         if not await self.can_moderate(
+
             ctx.author,
+
             member
+
         ):
 
-            return await ctx.send(
+            return await self.fail(
 
-                embed=self.embed(
+                ctx,
 
-                    description="❌ Cannot moderate this user.",
-
-                    color=ERROR
-
-                )
+                "Cannot moderate this user."
 
             )
 
-        await self.dm_user(
-            member,
-            "kicked",
-            reason
-        )
+        try:
 
-        await member.kick(
+            await self.dm_user(
 
-            reason=f"{ctx.author} | {reason}"
+                member,
 
-        )
+                "kicked",
+
+                reason
+
+            )
+
+            await member.kick(
+
+                reason=f"{ctx.author} | {reason}"
+
+            )
+
+        except Exception:
+
+            return await self.fail(
+
+                ctx,
+
+                "Kick failed."
+
+            )
 
         await ctx.send(
 
             embed=self.embed(
 
-                title="👢 Member Kicked",
+                title="Member Kicked",
 
-                description=(
-                    f"{member.mention}\n"
-                    f"Reason: {reason}"
-                ),
+                description=f"{member.mention}\nReason: {reason}",
 
                 color=WARNING
 
@@ -187,7 +243,7 @@ class Moderation(commands.Cog):
 
             "kick",
 
-            content=f"{member} kicked\nReason: {reason}",
+            content=f"{member} kicked\n{reason}",
 
             user_id=member.id,
 
@@ -195,68 +251,93 @@ class Moderation(commands.Cog):
 
         )
 
-    # ==================================================
+    # ==========================================
     # BAN
-    # ==================================================
+    # ==========================================
 
-    @commands.hybrid_command(name="ban")
+    @commands.hybrid_command()
 
     @commands.has_permissions(
         ban_members=True
     )
 
+    @commands.bot_has_permissions(
+        ban_members=True
+    )
+
     async def ban(
+
         self,
+
         ctx,
-        member: discord.Member,
-        delete_days: app_commands.Range[int,0,7]=0,
+
+        member:discord.Member,
+
+        delete_days:app_commands.Range[int,0,7]=0,
+
         *,
+
         reason="No reason provided"
+
     ):
 
         if not await self.can_moderate(
+
             ctx.author,
+
             member
+
         ):
 
-            return await ctx.send(
+            return await self.fail(
 
-                embed=self.embed(
+                ctx,
 
-                    description="❌ Cannot moderate this user.",
+                "Cannot moderate this user."
 
-                    color=ERROR
+            )
+
+        try:
+
+            await self.dm_user(
+
+                member,
+
+                "banned",
+
+                reason
+
+            )
+
+            await member.ban(
+
+                reason=reason,
+
+                delete_message_seconds=(
+
+                    delete_days*86400
 
                 )
 
             )
 
-        await self.dm_user(
-            member,
-            "banned",
-            reason
-        )
+        except:
 
-        await member.ban(
+            return await self.fail(
 
-            reason=reason,
+                ctx,
 
-            delete_message_seconds=(
-                delete_days * 86400
+                "Ban failed."
+
             )
-
-        )
 
         await ctx.send(
 
             embed=self.embed(
 
-                title="🔨 Member Banned",
+                title="Member Banned",
 
-                description=(
-                    f"{member.mention}\n"
-                    f"Reason: {reason}"
-                ),
+                description=f"{member.mention}\nReason: {reason}",
 
                 color=ERROR
 
@@ -278,48 +359,70 @@ class Moderation(commands.Cog):
 
         )
 
-    # ==================================================
+    # ==========================================
     # TEMPBAN
-    # ==================================================
+    # ==========================================
 
-    @commands.hybrid_command(
-        name="tempban"
-    )
+    @commands.hybrid_command()
 
     @commands.has_permissions(
         ban_members=True
     )
 
     async def tempban(
+
         self,
+
         ctx,
-        member: discord.Member,
+
+        member:discord.Member,
+
         minutes:int,
+
         *,
-        reason="No reason provided"
+
+        reason="No reason"
+
     ):
 
         if minutes <= 0:
 
-            return await ctx.send(
-                "Invalid duration."
+            return await self.fail(
+
+                ctx,
+
+                "Duration must be positive."
+
             )
 
         if not await self.can_moderate(
+
             ctx.author,
+
             member
+
         ):
 
-            return
+            return await self.fail(
+
+                ctx,
+
+                "Cannot moderate user."
+
+            )
 
         await member.ban(
+
             reason=reason
+
         )
 
-        async def unban_later():
+        async def unban():
 
             await asyncio.sleep(
-                minutes * 60
+
+                minutes*60
+
             )
 
             try:
@@ -327,28 +430,35 @@ class Moderation(commands.Cog):
                 await ctx.guild.unban(
 
                     discord.Object(
+
                         id=member.id
+
                     )
 
                 )
 
-            except Exception:
+            except:
 
                 pass
 
-        asyncio.create_task(
-            unban_later()
+        self.bot.loop.create_task(
+
+            unban()
+
         )
 
         await ctx.send(
 
             embed=self.embed(
 
-                title="⏳ Tempban",
+                title="Temporary Ban",
 
                 description=(
+
                     f"{member.mention}\n"
-                    f"{minutes} minutes"
+
+                    f"Duration: {minutes} minutes"
+
                 ),
 
                 color=ERROR
@@ -357,41 +467,75 @@ class Moderation(commands.Cog):
 
         )
 
-    # ==================================================
+    # ==========================================
     # TIMEOUT
-    # ==================================================
+    # ==========================================
 
-    @commands.hybrid_command(
-        name="timeout"
-    )
+    @commands.hybrid_command()
 
     @commands.has_permissions(
         moderate_members=True
     )
 
     async def timeout(
+
         self,
+
         ctx,
-        member: discord.Member,
+
+        member:discord.Member,
+
         minutes:int,
+
         *,
-        reason="No reason provided"
+
+        reason="No reason"
+
     ):
 
+        if minutes <= 0:
+
+            return await self.fail(
+
+                ctx,
+
+                "Invalid duration."
+
+            )
+
         if not await self.can_moderate(
+
             ctx.author,
+
             member
+
         ):
 
-            return
+            return await self.fail(
 
-        await member.timeout(
+                ctx,
+
+                "Cannot moderate."
+
+            )
+
+        until=(
 
             discord.utils.utcnow()
 
-            + timedelta(
+            +
+
+            timedelta(
+
                 minutes=minutes
-            ),
+
+            )
+
+        )
+
+        await member.timeout(
+
+            until,
 
             reason=reason
 
@@ -401,51 +545,55 @@ class Moderation(commands.Cog):
 
             embed=self.embed(
 
-                title="🔇 Timeout",
+                title="Timeout",
 
-                description=(
-                    f"{member.mention}\n"
-                    f"{minutes} minutes"
-                )
+                description=f"{member.mention}\n{minutes} minutes"
 
             )
 
         )
 
-    # ==================================================
+        await dispatch_log(
+
+            ctx.guild,
+
+            "timeout",
+
+            content=f"{member} timed out",
+
+            user_id=member.id,
+
+            moderator_id=ctx.author.id
+
+        )
+
+    # ==========================================
     # UNTIMEOUT
-    # ==================================================
+    # ==========================================
 
-    @commands.hybrid_command(
-        name="untimeout"
-    )
-
-    @commands.has_permissions(
-        moderate_members=True
-    )
+    @commands.hybrid_command()
 
     async def untimeout(
+
         self,
+
         ctx,
-        member: discord.Member
+
+        member:discord.Member
+
     ):
 
-        if not await self.can_moderate(
-            ctx.author,
-            member
-        ):
-
-            return
-
         await member.timeout(
+
             None
+
         )
 
         await ctx.send(
 
             embed=self.embed(
 
-                description="✅ Timeout removed",
+                description="Timeout removed",
 
                 color=SUCCESS
 
@@ -453,9 +601,25 @@ class Moderation(commands.Cog):
 
         )
 
+        await dispatch_log(
+
+            ctx.guild,
+
+            "untimeout",
+
+            content=f"{member} timeout removed",
+
+            user_id=member.id,
+
+            moderator_id=ctx.author.id
+
+        )
+
 
 async def setup(bot):
 
     await bot.add_cog(
+
         Moderation(bot)
+
     )
