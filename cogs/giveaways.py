@@ -1,13 +1,10 @@
 import random
 import time
-import asyncio
-import aiosqlite
 import discord
 
 from discord.ext import commands, tasks
-from discord import app_commands
 
-from utils.database import DB_PATH
+from utils.database import get_db
 from utils.config import BRAND_COLOR
 from utils.dispatch import dispatch_log
 
@@ -29,12 +26,11 @@ class GiveawayView(discord.ui.View):
         button: discord.ui.Button
     ):
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             async with db.execute(
                 """
-                SELECT req_role,
-                black_role
+                SELECT req_role, black_role
                 FROM giveaways
                 WHERE message_id=?
                 """,
@@ -43,42 +39,40 @@ class GiveawayView(discord.ui.View):
 
                 data = await cursor.fetchone()
 
-        if not data:
-
-            return await interaction.response.send_message(
-                "This giveaway ended.",
-                ephemeral=True
-            )
-
-        req_role, black_role = data
-
-        if black_role:
-
-            role = interaction.guild.get_role(
-                black_role
-            )
-
-            if role and role in interaction.user.roles:
+            if not data:
 
                 return await interaction.response.send_message(
-                    "You cannot join this giveaway.",
+                    "This giveaway ended.",
                     ephemeral=True
                 )
 
-        if req_role:
+            req_role, black_role = data
 
-            role = interaction.guild.get_role(
-                req_role
-            )
+            if black_role:
 
-            if role and role not in interaction.user.roles:
-
-                return await interaction.response.send_message(
-                    f"You need {role.mention}",
-                    ephemeral=True
+                role = interaction.guild.get_role(
+                    black_role
                 )
 
-        async with aiosqlite.connect(DB_PATH) as db:
+                if role and role in interaction.user.roles:
+
+                    return await interaction.response.send_message(
+                        "You cannot join this giveaway.",
+                        ephemeral=True
+                    )
+
+            if req_role:
+
+                role = interaction.guild.get_role(
+                    req_role
+                )
+
+                if role and role not in interaction.user.roles:
+
+                    return await interaction.response.send_message(
+                        f"You need {role.mention}",
+                        ephemeral=True
+                    )
 
             try:
 
@@ -116,37 +110,11 @@ class Giveaways(commands.Cog):
 
         self.giveaway_loop.start()
 
-        bot.add_view(
-            GiveawayView()
-        )
-
     async def cog_load(self):
 
-        async with aiosqlite.connect(DB_PATH) as db:
-
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS giveaways(
-                message_id INTEGER PRIMARY KEY,
-                guild_id INTEGER,
-                channel_id INTEGER,
-                prize TEXT,
-                winners INTEGER,
-                end_time INTEGER,
-                ended INTEGER DEFAULT 0,
-                req_role INTEGER,
-                black_role INTEGER
-            )
-            """)
-
-            await db.execute("""
-            CREATE TABLE IF NOT EXISTS giveaway_entries(
-                message_id INTEGER,
-                user_id INTEGER,
-                PRIMARY KEY(message_id,user_id)
-            )
-            """)
-
-            await db.commit()
+        self.bot.add_view(
+            GiveawayView()
+        )
 
     def cog_unload(self):
 
@@ -165,26 +133,18 @@ class Giveaways(commands.Cog):
 
         try:
 
-            return int(
-                text[:-1]
-            ) * values[
-                text[-1].lower()
-            ]
+            return int(text[:-1]) * values[text[-1].lower()]
 
         except:
 
             return None
 
-    @tasks.loop(
-        seconds=15
-    )
+    @tasks.loop(seconds=15)
     async def giveaway_loop(self):
 
-        now = int(
-            time.time()
-        )
+        now = int(time.time())
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             async with db.execute(
                 """
@@ -196,9 +156,9 @@ class Giveaways(commands.Cog):
                 (now,)
             ) as cursor:
 
-                data = await cursor.fetchall()
+                giveaways = await cursor.fetchall()
 
-        for giveaway in data:
+        for giveaway in giveaways:
 
             await self.finish_giveaway(
                 giveaway
@@ -226,6 +186,7 @@ class Giveaways(commands.Cog):
         )
 
         if not guild:
+
             return
 
         channel = guild.get_channel(
@@ -233,19 +194,10 @@ class Giveaways(commands.Cog):
         )
 
         if not channel:
-            return
-
-        try:
-
-            message = await channel.fetch_message(
-                message_id
-            )
-
-        except:
 
             return
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             async with db.execute(
                 """
@@ -269,19 +221,19 @@ class Giveaways(commands.Cog):
 
             await db.commit()
 
-        members = []
+        members = [
 
-        for row in users:
-
-            member = guild.get_member(
+            guild.get_member(
                 row[0]
             )
 
-            if member:
+            for row in users
 
-                members.append(
-                    member
-                )
+            if guild.get_member(
+                row[0]
+            )
+
+        ]
 
         if not members:
 
@@ -290,7 +242,9 @@ class Giveaways(commands.Cog):
             )
 
         winners = random.sample(
+
             members,
+
             min(
                 winners_count,
                 len(members)
@@ -298,20 +252,10 @@ class Giveaways(commands.Cog):
         )
 
         mentions = ", ".join(
+
             x.mention
+
             for x in winners
-        )
-
-        embed = discord.Embed(
-
-            title="🎉 Giveaway Ended",
-
-            description=(
-                f"Prize: **{prize}**\n"
-                f"Winners: {mentions}"
-            ),
-
-            color=discord.Color.gold()
 
         )
 
@@ -319,7 +263,18 @@ class Giveaways(commands.Cog):
 
             content=f"Congratulations {mentions}",
 
-            embed=embed
+            embed=discord.Embed(
+
+                title="🎉 Giveaway Ended",
+
+                description=(
+                    f"Prize: **{prize}**\n"
+                    f"Winners: {mentions}"
+                ),
+
+                color=BRAND_COLOR
+
+            )
 
         )
 
@@ -336,12 +291,12 @@ class Giveaways(commands.Cog):
 
         )
 
-    @commands.hybrid_command(
-        name="gstart"
-    )
+    @commands.hybrid_command()
+
     @commands.has_permissions(
         manage_guild=True
     )
+
     async def gstart(
 
         self,
@@ -360,7 +315,7 @@ class Giveaways(commands.Cog):
 
     ):
 
-        seconds = self.parse_time(
+        seconds=self.parse_time(
             duration
         )
 
@@ -370,33 +325,31 @@ class Giveaways(commands.Cog):
                 "Use: 10m / 1h / 1d"
             )
 
-        end = int(
+        end=int(
             time.time()
-        ) + seconds
+        )+seconds
 
-        embed = discord.Embed(
+        msg=await ctx.send(
 
-            title="🎉 Giveaway",
+            embed=discord.Embed(
 
-            description=(
-                f"Prize: **{prize}**\n"
-                f"Winners: **{winners}**\n"
-                f"Ends: <t:{end}:R>"
+                title="🎉 Giveaway",
+
+                description=(
+                    f"Prize: **{prize}**\n"
+                    f"Winners: **{winners}**\n"
+                    f"Ends: <t:{end}:R>"
+                ),
+
+                color=BRAND_COLOR
+
             ),
-
-            color=BRAND_COLOR
-
-        )
-
-        msg = await ctx.send(
-
-            embed=embed,
 
             view=GiveawayView()
 
         )
 
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with await get_db() as db:
 
             await db.execute(
                 """
@@ -427,4 +380,4 @@ async def setup(bot):
 
     await bot.add_cog(
         Giveaways(bot)
-    )
+                )
