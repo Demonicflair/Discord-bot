@@ -9,49 +9,71 @@ from discord.ext import commands, tasks
 from utils.dispatch import dispatch_log
 from utils.database import get_db
 from utils.config import (
-    BRAND_COLOR,
+
     SCAM_PATTERN,
     BAD_WORDS,
     ANTI_LINK
+
 )
 
-SCAM_PATTERNS = [
+# ==========================
+# SCAM PATTERNS
+# ==========================
+
+SCAM_PATTERNS=[
 
     r"free.*nitro",
+
     r"nitro.*free",
+
     r"steam.*gift",
+
     r"claim.*reward",
+
     r"discord.*gift",
+
     r"free.*robux",
-    r"@everyone.*gift",
+
     r"cheap.*nitro",
+
     r"airdrop",
-    r"crypto.*reward",
-    SCAM_PATTERN
+
+    r"crypto.*reward"
+
 ]
 
-COMPILED_SCAMS = [
+if isinstance(SCAM_PATTERN,str):
+
+    SCAM_PATTERNS.append(
+        SCAM_PATTERN
+    )
+
+COMPILED_SCAMS=[
 
     re.compile(
+
         pattern,
+
         re.IGNORECASE
+
     )
 
     for pattern in SCAM_PATTERNS
+
 ]
 
 
 class SecurityAI(commands.Cog):
 
-    def __init__(self, bot):
+    def __init__(self,bot):
 
-        self.bot = bot
+        self.bot=bot
 
-        self.heat_levels = {}
+        self.heat_levels={}
 
-        self.message_cache = {}
+        self.message_cache={}
 
-        self.settings_cache = {}
+        self.settings_cache={}
 
         self.clean_heat.start()
 
@@ -59,79 +81,85 @@ class SecurityAI(commands.Cog):
 
         self.clean_heat.cancel()
 
-    # =========================
-    # SETTINGS CACHE
-    # =========================
-
     async def get_security_setting(
+
         self,
+
         guild_id,
+
         feature
+
     ):
 
-        key = (
-            guild_id,
-            feature
-        )
+        key=(guild_id,feature)
 
         if key in self.settings_cache:
 
             return self.settings_cache[key]
 
-        async with await get_db() as db:
+        db=await get_db()
 
-            cursor = await db.execute(
+        try:
+
+            cursor=await db.execute(
 
                 """
+
                 SELECT enabled
+
                 FROM settings
+
                 WHERE guild_id=?
+
                 AND feature=?
+
                 """,
 
                 (
+
                     guild_id,
+
                     feature
+
                 )
 
             )
 
-            row = await cursor.fetchone()
+            row=await cursor.fetchone()
 
             await cursor.close()
 
-        value = (
+        finally:
 
-            True
+            await db.close()
 
-            if row is None
+        value=True if row is None else bool(
 
-            else bool(
-                row["enabled"]
-            )
+            row["enabled"]
 
         )
 
-        self.settings_cache[key] = value
+        self.settings_cache[key]=value
 
         return value
 
-    # =========================
-    # HEAT SYSTEM
-    # =========================
-
     async def add_heat(
+
         self,
+
         message,
+
         amount,
+
         reason
+
     ):
 
         if message.author.guild_permissions.manage_messages:
 
             return
 
-        key = (
+        key=(
 
             message.guild.id,
 
@@ -139,52 +167,35 @@ class SecurityAI(commands.Cog):
 
         )
 
-        current = self.heat_levels.get(
+        current=self.heat_levels.get(
+
             key,
+
             0
+
         )
 
-        current += amount
+        current+=amount
 
-        self.heat_levels[key] = current
+        self.heat_levels[key]=current
 
-        if current >= 10:
+        if current>=10:
 
             try:
 
                 await message.author.ban(
 
-                    reason=f"Security AI: {reason}"
+                    reason=reason
 
                 )
 
-                await dispatch_log(
-
-                    guild=message.guild,
-
-                    log_type="security",
-
-                    content=(
-                        f"Auto Ban\n"
-                        f"Reason: {reason}"
-                    ),
-
-                    user_id=message.author.id
-
-                )
-
-                self.heat_levels.pop(
-                    key,
-                    None
-                )
-
-            except Exception:
+            except:
 
                 pass
 
             return
 
-        if current >= 6:
+        elif current>=6:
 
             try:
 
@@ -195,56 +206,23 @@ class SecurityAI(commands.Cog):
                     +
 
                     datetime.timedelta(
+
                         hours=1
+
                     ),
 
                     reason=reason
 
                 )
 
-            except Exception:
+            except:
 
                 pass
-
-            return
-
-        if current >= 3:
-
-            try:
-
-                warn = await message.channel.send(
-
-                    embed=discord.Embed(
-
-                        title="⚠ Security Warning",
-
-                        description=(
-                            f"{message.author.mention}\n"
-                            f"{reason}"
-                        ),
-
-                        color=discord.Color.orange()
-
-                    )
-
-                )
-
-                await asyncio.sleep(
-                    8
-                )
-
-                await warn.delete()
-
-            except Exception:
-
-                pass
-
-    # =========================
-    # CLEANER
-    # =========================
 
     @tasks.loop(
+
         minutes=30
+
     )
 
     async def clean_heat(self):
@@ -252,33 +230,37 @@ class SecurityAI(commands.Cog):
         remove=[]
 
         for k in list(
+
             self.heat_levels
+
         ):
 
             self.heat_levels[k]-=1
 
-            if self.heat_levels[k] <=0:
+            if self.heat_levels[k]<=0:
 
                 remove.append(k)
 
         for k in remove:
 
             self.heat_levels.pop(
+
                 k,
+
                 None
+
             )
 
         self.message_cache.clear()
 
-    # =========================
-    # MESSAGE SCAN
-    # =========================
-
     @commands.Cog.listener()
 
     async def on_message(
+
         self,
+
         message
+
     ):
 
         if (
@@ -293,9 +275,7 @@ class SecurityAI(commands.Cog):
 
             return
 
-        content = message.content.lower()
-
-        # BAD WORDS
+        content=message.content.lower()
 
         if await self.get_security_setting(
 
@@ -317,13 +297,11 @@ class SecurityAI(commands.Cog):
 
                         2,
 
-                        "Bad Language"
+                        "Bad Words"
 
                     )
 
                     return
-
-        # SCAMS
 
         if await self.get_security_setting(
 
@@ -335,9 +313,7 @@ class SecurityAI(commands.Cog):
 
             for pattern in COMPILED_SCAMS:
 
-                if pattern.search(
-                    content
-                ):
+                if pattern.search(content):
 
                     await message.delete()
 
@@ -353,90 +329,31 @@ class SecurityAI(commands.Cog):
 
                     return
 
-        # LINKS
-
         if (
 
             ANTI_LINK
 
             and
 
-            await self.get_security_setting(
-
-                message.guild.id,
-
-                "anti_link"
-
-            )
+            "http" in content
 
         ):
 
-            if (
+            if not message.author.guild_permissions.manage_messages:
 
-                "http://" in content
+                await message.delete()
 
-                or
+                await self.add_heat(
 
-                "https://" in content
+                    message,
 
-            ):
+                    3,
 
-                if not message.author.guild_permissions.manage_messages:
+                    "Links"
 
-                    await message.delete()
+                )
 
-                    await self.add_heat(
-
-                        message,
-
-                        3,
-
-                        "Link"
-
-                    )
-
-                    return
-
-        # SPAM DETECTION
-
-        key = (
-
-            message.guild.id,
-
-            message.author.id
-
-        )
-
-        now=time.time()
-
-        cache=self.message_cache.setdefault(
-            key,
-            []
-        )
-
-        cache.append(now)
-
-        cache[:] = [
-
-            t
-
-            for t in cache
-
-            if now-t <=5
-
-        ]
-
-        if len(cache)>=7:
-
-            await self.add_heat(
-
-                message,
-
-                4,
-
-                "Spam"
-
-            )
+                return
 
 async def setup(bot):
 
